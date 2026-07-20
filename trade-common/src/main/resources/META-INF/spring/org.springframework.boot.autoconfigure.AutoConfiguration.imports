@@ -1,1 +1,3 @@
 com.mtx.trade.common.id.GlobalIdAutoConfiguration
+com.mtx.trade.common.storage.config.StorageAutoConfiguration
+com.mtx.trade.common.storage.config.StorageShardingAutoConfiguration

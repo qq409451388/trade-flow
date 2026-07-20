@@ -1,7 +1,8 @@
 spring:
+  # common 负责 storage 分表规则，接入方只提供标准数据源配置
   datasource:
-    url: jdbc:mysql://127.0.0.1:3306/tele_salest_training_system?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8&useSSL=false&allowPublicKeyRetrieval=true&connectTimeout=10000&socketTimeout=600000&tcpKeepAlive=true
-    username: app_user_sales_training
+    url: jdbc:mysql://127.0.0.1:3306/trade_flow?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8&useSSL=false&allowPublicKeyRetrieval=true&connectTimeout=10000&socketTimeout=600000&tcpKeepAlive=true
+    username: app_user_trade_flow
     password: "@2026App!"
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
@@ -10,6 +11,8 @@ spring:
       idle-timeout: 600000
       max-lifetime: 1500000
       keepalive-time: 300000
+      maximum-pool-size: 10
+      minimum-idle: 1
       connection-test-query: SELECT 1
   data:
     redis:

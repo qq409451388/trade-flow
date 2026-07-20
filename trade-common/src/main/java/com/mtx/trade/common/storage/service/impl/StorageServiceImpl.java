@@ -9,6 +9,7 @@ import com.mtx.trade.common.storage.service.db.StorageDbService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -29,6 +30,7 @@ public class StorageServiceImpl implements StorageService {
     private final StorageBlobDbService storageBlobDbService;
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public StorageDO saveRawData(int sourceSystem, int contentType, byte[] payload) {
         byte[] sha256 = sha256(payload);
 
