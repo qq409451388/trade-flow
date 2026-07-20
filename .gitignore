@@ -1,0 +1,40 @@
+# ===== Maven 构建产物 =====
+target/
+build/
+out/
+
+# ===== 编译产物 =====
+*.class
+*.jar
+*.war
+*.ear
+
+# ===== Maven Shade 插件生成 =====
+dependency-reduced-pom.xml
+
+# ===== IDE - IntelliJ IDEA =====
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# ===== IDE - Eclipse =====
+.classpath
+.project
+.settings/
+.metadata/
+
+# ===== IDE - VS Code =====
+.vscode/
+
+# ===== 操作系统 =====
+.DS_Store
+Thumbs.db
+
+# ===== 日志 =====
+*.log
+logs/
+
+# ===== 其他 =====
+hs_err_pid*
+replay_pid*

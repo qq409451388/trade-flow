@@ -1,0 +1,5 @@
+spring:
+  application:
+    name: trade-common
+  profiles:
+    active: dev
