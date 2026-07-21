@@ -55,7 +55,9 @@ trade-common：DTO、异常、枚举、ID 等轻量公共能力
 - `putIfAbsent` 先按 `(source_system, payload_sha256)` 精确查询单个分片；并发竞争最终由分片内同字段唯一键兜底，命中后返回已有 `(id, SHA-256)`。
 - 虚拟分片数量 100 是稳定契约。未来拆 MySQL 实例时只重新分配 00~99 逻辑桶，禁止改为 `SHA % 数据库实例数`。
 
-全新环境建表脚本见 `docs/sql/trade-storage-schema.sql`；当前空分片迁移脚本见 `docs/sql/trade-storage-2026-07-21.sql`。后者发现任一物理分表有数据会主动终止，已有数据必须按新 SHA 路由搬迁后再切换规则。
+全新环境先执行 `../sql/trade-flow-base-schema.sql` 创建 Storage 模板表，再执行
+`../sql/trade-storage-shards.sql` 创建100组物理分表。已有环境迁移必须单独评审并生成迁移脚本，禁止把
+一次性迁移逻辑混入最终初始化 SQL。
 
 ## 4. 数据源与 MyBatis 隔离
 
@@ -114,7 +116,7 @@ storage 领域配置为独立 `SnowflakeIdEngine`，拥有自己的毫秒内 seq
 
 - 不启动第三个 Storage Boot，不设计远程接口实现。
 - 不引入注册中心、分布式事务、分布式锁或多 MySQL 实例。
-- Pipeline 订单分表已独立实现，具体规则见 `docs/pipeline-design.md`；Storage 不得引用或复用该规则。
+- Pipeline 订单分表已独立实现，具体规则见 `pipeline-design.md`；Storage 不得引用或复用该规则。
 - 不实施 Outbox、幂等 requestId、CDC 迁移和 OSS 存储；这些属于服务化或可靠消息阶段。
 
 ## 6.1 与 Event 消息版本的关系

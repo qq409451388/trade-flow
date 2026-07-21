@@ -10,7 +10,7 @@ ShardingSphere/Hikari 等持久化依赖。Storage 能力分别位于：
 - `trade-storage-api`：稳定的 Storage 读写端口和 DTO。
 - `trade-storage-local`：单机 MySQL adapter、持久化实体和分表规则。
 
-详细设计见根目录 `docs/storage-design.md`。
+详细设计见根目录 `../docs/design/storage-design.md`。
 
 ## 核心设计
 

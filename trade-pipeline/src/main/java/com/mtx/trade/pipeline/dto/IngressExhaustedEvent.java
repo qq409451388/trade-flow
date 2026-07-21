@@ -2,8 +2,8 @@ package com.mtx.trade.pipeline.dto;
 
 import java.time.LocalDateTime;
 
-/** Ingress 自动投递耗尽的订单事件引用。 */
-public record IngressExhaustedOrderEvent(
+/** Ingress 自动投递耗尽的事件引用。 */
+public record IngressExhaustedEvent(
         Integer contentType,
         Long eventId,
         Integer sourceSystem,

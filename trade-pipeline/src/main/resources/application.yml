@@ -12,7 +12,7 @@ spring:
   task:
     scheduling:
       pool:
-        size: 2
+        size: 4
 
 mybatis-plus:
   mapper-locations: classpath*:/mapper/**/*.xml
@@ -56,8 +56,21 @@ trade:
       ingress-ack-connect-timeout: 3s
       ingress-ack-read-timeout: 5s
       ingress-exhausted-url: ${INGRESS_EXHAUSTED_URL:http://127.0.0.1:8115/trade-ingress/event/redelivery-exhausted}
+    payment-event-consumer:
+      enabled: true
+      stream-key: stream:payment-event
+      group: trade-pipeline-payment
+      consumer-name: ${PIPELINE_PAYMENT_CONSUMER_NAME:pipeline-payment-1}
+      batch-size: 100
+      poll-delay: 1000
+      block-timeout: 2s
+      reclaim-delay: 30000
+      pending-min-idle: 1m
     fuiou-order:
       zone-id: Asia/Shanghai
+    fuiou-payment:
+      zone-id: Asia/Shanghai
+      year-boundary-window: 3h
   storage:
     local:
       enabled: true

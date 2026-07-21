@@ -1,3 +1,7 @@
+-- Trade Pipeline 最终基础结构。
+-- oms_* 无年份表仅作为年度物理表模板；运行时 ShardingSphere 不路由到这些模板表。
+-- 新环境执行顺序：先执行本文件，再执行 trade-pipeline-year-shards.sql。
+
 CREATE TABLE `oms_order` (
                              `id` BIGINT NOT NULL COMMENT '全局雪花ID',
 
@@ -690,3 +694,154 @@ CREATE TABLE `oms_order_package_item` (
   COLLATE = utf8mb4_0900_ai_ci
   ROW_FORMAT = DYNAMIC
   COMMENT = '订单套餐子商品明细基础表，实际跟随父订单按年份建表';
+
+
+CREATE TABLE `oms_payment` (
+                                    `id` BIGINT UNSIGNED NOT NULL COMMENT '雪花主键',
+
+                                    `pay_ssn` VARCHAR(64) NOT NULL COMMENT '支付或退款流水号',
+                                    `source_pay_ssn` VARCHAR(64) NOT NULL DEFAULT ''
+                                        COMMENT '退款对应的原支付流水号',
+
+                                    `order_no` BIGINT NOT NULL DEFAULT 0
+                                        COMMENT '订单号，0表示充值等非普通订单业务',
+
+                                    `mchnt_cd` VARCHAR(32) NOT NULL COMMENT '商户号',
+                                    `shop_id` BIGINT NOT NULL DEFAULT 0 COMMENT '门店ID，0表示无具体门店',
+                                    `shop_name` VARCHAR(64) NOT NULL DEFAULT '' COMMENT '门店名称快照',
+
+                                    `pay_time` DATETIME(3) NOT NULL COMMENT '原支付时间，也是年度分表依据',
+                                    `refund_time` DATETIME(3) DEFAULT NULL COMMENT '退款发生时间',
+
+                                    `pay_type` VARCHAR(16) NOT NULL DEFAULT '' COMMENT '支付方式编码',
+                                    `pay_name` VARCHAR(32) NOT NULL DEFAULT '' COMMENT '支付方式名称',
+                                    `pay_state` TINYINT UNSIGNED NOT NULL COMMENT '1支付成功，2退款成功',
+
+                                    `pay_amt` BIGINT NOT NULL DEFAULT 0 COMMENT '支付金额（分）',
+                                    `fee_amt` BIGINT NOT NULL DEFAULT 0 COMMENT '手续费（分）',
+                                    `refund_amt` BIGINT NOT NULL DEFAULT 0 COMMENT '退款金额（分）',
+                                    `balance_dis_amt` BIGINT NOT NULL DEFAULT 0 COMMENT '赠送账户优惠金额（分）',
+                                    `face_amt` BIGINT NOT NULL DEFAULT 0 COMMENT '券面金额（分）',
+
+                                    `fy_settle` TINYINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '是否富友清算',
+
+                                    `third_order_no` VARCHAR(64) NOT NULL DEFAULT ''
+                                        COMMENT '第三方业务订单号，可被多条支付退款流水共用',
+                                    `channel_trade_no` VARCHAR(64) NOT NULL DEFAULT ''
+                                        COMMENT '支付渠道交易流水号',
+
+                                    `big_category` VARCHAR(4) NOT NULL DEFAULT '' COMMENT '业务大类',
+                                    `small_category` VARCHAR(4) NOT NULL DEFAULT '' COMMENT '业务小类',
+                                    `order_source` VARCHAR(4) NOT NULL DEFAULT '' COMMENT '支付单来源',
+
+                                    `open_id` VARCHAR(64) NOT NULL DEFAULT '' COMMENT '支付用户OpenID，上游扩展字段',
+                                    `order_type` VARCHAR(4) NOT NULL DEFAULT '' COMMENT '订单类型，上游扩展字段',
+                                    `channel_type` VARCHAR(4) NOT NULL DEFAULT '' COMMENT '渠道类型，上游扩展字段',
+
+                                    `member_name` VARCHAR(128) NOT NULL DEFAULT '' COMMENT '会员名称快照',
+                                    `phone` VARCHAR(20) NOT NULL DEFAULT '' COMMENT '会员手机号快照',
+                                    `member_card_no` VARCHAR(64) NOT NULL DEFAULT '' COMMENT '会员实体卡号',
+                                    `member_level` VARCHAR(4) NOT NULL DEFAULT '' COMMENT '会员等级值',
+
+                                    `storage_id` BIGINT UNSIGNED NOT NULL COMMENT '原始报文Storage ID',
+                                    `payload_sha256` BINARY(32) NOT NULL COMMENT '原始报文SHA-256',
+
+                                    `create_time` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+                                    `update_time` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+        ON UPDATE CURRENT_TIMESTAMP(3),
+
+                                    PRIMARY KEY (`id`),
+                                    UNIQUE KEY `uk_pay_ssn` (`pay_ssn`),
+
+                                    KEY `idx_source_pay_ssn` (`source_pay_ssn`),
+                                    KEY `idx_order_no` (`order_no`),
+                                    KEY `idx_third_order_no` (`third_order_no`),
+                                    KEY `idx_channel_trade_no` (`channel_trade_no`),
+                                    KEY `idx_pay_time` (`pay_time`),
+                                    KEY `idx_mchnt_shop_time` (`mchnt_cd`, `shop_id`, `pay_time`),
+                                    KEY `idx_create_time` (`create_time`)
+) ENGINE=InnoDB
+  DEFAULT CHARSET=utf8mb4
+  COLLATE=utf8mb4_0900_ai_ci
+  COMMENT='支付及退款流水表';
+
+
+CREATE TABLE `oms_payment_account` (
+                                            `id` BIGINT UNSIGNED NOT NULL COMMENT '雪花主键',
+                                            `payment_id` BIGINT UNSIGNED NOT NULL COMMENT '关联oms_payment.id',
+                                            `pay_ssn` VARCHAR(64) NOT NULL COMMENT '关联支付或退款流水号',
+                                            `account_seq` SMALLINT UNSIGNED NOT NULL COMMENT '结算账户列表序号',
+
+                                            `cust_acnt_tp` VARCHAR(4) NOT NULL DEFAULT ''
+                                                COMMENT '账户性质：G对公，S对私',
+                                            `mchnt_cd` VARCHAR(32) NOT NULL DEFAULT '' COMMENT '结算商户号',
+                                            `shop_id` BIGINT NOT NULL DEFAULT 0 COMMENT '结算门店ID',
+                                            `out_acnt_nm` VARCHAR(128) NOT NULL DEFAULT '' COMMENT '结算户名',
+                                            `out_acnt_no` VARCHAR(128) NOT NULL DEFAULT ''
+                                                COMMENT '上游返回的加密卡号',
+
+                                            `create_time` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+                                            `update_time` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+        ON UPDATE CURRENT_TIMESTAMP(3),
+
+                                            PRIMARY KEY (`id`),
+                                            UNIQUE KEY `uk_payment_account_seq` (`payment_id`, `account_seq`),
+
+                                            KEY `idx_pay_ssn` (`pay_ssn`),
+                                            KEY `idx_mchnt_shop` (`mchnt_cd`, `shop_id`)
+) ENGINE=InnoDB
+  DEFAULT CHARSET=utf8mb4
+  COLLATE=utf8mb4_0900_ai_ci
+  COMMENT='支付结算账户明细表';
+
+CREATE TABLE `pipeline_order_event_log` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '自增主键',
+    `event_id` BIGINT NULL COMMENT 'Ingress订单event ID，消息无法解析时为空',
+    `stream_record_id` VARCHAR(64) NULL COMMENT 'Redis Stream record ID，主动拉取时为空',
+    `trigger_type` TINYINT UNSIGNED NOT NULL COMMENT '触发方式：1新消息；2 PEL接管；3主动拉取',
+    `storage_id` BIGINT NULL COMMENT '关联trade_storage.id',
+    `payload_sha256` BINARY(32) NULL COMMENT 'Storage SHA-256',
+    `event_key` VARCHAR(128) NULL COMMENT '第三方事件键',
+    `message_version` BIGINT UNSIGNED NULL COMMENT '第三方消息版本',
+    `process_status` TINYINT UNSIGNED NOT NULL COMMENT '结果：1已应用；2重复或旧版本；3失败',
+    `failure_stage` VARCHAR(32) NULL COMMENT '失败阶段',
+    `error_code` INT NULL COMMENT '失败错误码',
+    `failure_reason` VARCHAR(1024) NULL COMMENT '失败原因摘要',
+    `started_time` DATETIME(3) NOT NULL COMMENT '开始处理时间',
+    `finished_time` DATETIME(3) NOT NULL COMMENT '结束处理时间',
+    `duration_ms` BIGINT UNSIGNED NOT NULL COMMENT '处理耗时毫秒',
+    `create_time` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (`id`),
+    KEY `idx_event_time` (`event_id`, `create_time`),
+    KEY `idx_status_time` (`process_status`, `create_time`),
+    KEY `idx_storage` (`storage_id`, `payload_sha256`)
+) ENGINE=InnoDB
+  DEFAULT CHARSET=utf8mb4
+  COLLATE=utf8mb4_0900_ai_ci
+  COMMENT='Pipeline订单事件每次实际处理审计流水';
+
+CREATE TABLE `pipeline_payment_event_log` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '自增主键',
+    `event_id` BIGINT NULL COMMENT 'Ingress支付event ID，消息无法解析时为空',
+    `stream_record_id` VARCHAR(64) NULL COMMENT 'Redis Stream record ID，主动拉取时为空',
+    `trigger_type` TINYINT UNSIGNED NOT NULL COMMENT '触发方式：1新消息；2 PEL接管；3主动拉取',
+    `storage_id` BIGINT NULL COMMENT '关联trade_storage.id',
+    `payload_sha256` BINARY(32) NULL COMMENT 'Storage SHA-256',
+    `event_key` VARCHAR(128) NULL COMMENT '第三方事件键',
+    `message_version` BIGINT UNSIGNED NULL COMMENT '第三方消息版本',
+    `process_status` TINYINT UNSIGNED NOT NULL COMMENT '结果：1已应用；2幂等重复；3失败',
+    `failure_stage` VARCHAR(32) NULL COMMENT '失败阶段',
+    `error_code` INT NULL COMMENT '失败错误码',
+    `failure_reason` VARCHAR(1024) NULL COMMENT '失败原因摘要',
+    `started_time` DATETIME(3) NOT NULL COMMENT '开始处理时间',
+    `finished_time` DATETIME(3) NOT NULL COMMENT '结束处理时间',
+    `duration_ms` BIGINT UNSIGNED NOT NULL COMMENT '处理耗时毫秒',
+    `create_time` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (`id`),
+    KEY `idx_event_time` (`event_id`, `create_time`),
+    KEY `idx_status_time` (`process_status`, `create_time`),
+    KEY `idx_storage` (`storage_id`, `payload_sha256`)
+) ENGINE=InnoDB
+  DEFAULT CHARSET=utf8mb4
+  COLLATE=utf8mb4_0900_ai_ci
+  COMMENT='Pipeline支付事件每次实际处理审计流水';

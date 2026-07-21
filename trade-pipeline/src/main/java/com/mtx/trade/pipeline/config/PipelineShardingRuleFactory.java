@@ -20,10 +20,13 @@ public final class PipelineShardingRuleFactory {
     public static final String ORDER_ITEM_TABLE = "oms_order_item";
     public static final String ORDER_ITEM_SPEC_TABLE = "oms_order_item_spec";
     public static final String ORDER_PACKAGE_ITEM_TABLE = "oms_order_package_item";
+    public static final String PAYMENT_TABLE = "oms_payment";
+    public static final String PAYMENT_ACCOUNT_TABLE = "oms_payment_account";
 
     private static final String YEAR_ALGORITHM = "pipeline_order_year";
     private static final String YEAR_ORDER_ALGORITHM = "pipeline_order_item_year_hash";
     private static final String YEAR_HINT_ALGORITHM = "pipeline_order_year_hint";
+    private static final String REQUIRED_YEAR_HINT_ALGORITHM = "pipeline_required_year_hint";
 
     private PipelineShardingRuleFactory() {
     }
@@ -40,6 +43,8 @@ public final class PipelineShardingRuleFactory {
         rule.getTables().add(orderItemTableRule(years, shardCount));
         rule.getTables().add(yearHintTableRule(ORDER_ITEM_SPEC_TABLE, years));
         rule.getTables().add(yearTableRule(ORDER_PACKAGE_ITEM_TABLE, "item_create_time", years));
+        rule.getTables().add(requiredYearHintTableRule(PAYMENT_TABLE, years));
+        rule.getTables().add(requiredYearHintTableRule(PAYMENT_ACCOUNT_TABLE, years));
 
         rule.getShardingAlgorithms().put(YEAR_ALGORITHM,
                 classBasedAlgorithm("STANDARD", PipelineYearShardingAlgorithm.class));
@@ -47,6 +52,8 @@ public final class PipelineShardingRuleFactory {
                 classBasedAlgorithm("COMPLEX", PipelineOrderItemShardingAlgorithm.class));
         rule.getShardingAlgorithms().put(YEAR_HINT_ALGORITHM,
                 classBasedAlgorithm("HINT", PipelineYearHintShardingAlgorithm.class));
+        rule.getShardingAlgorithms().put(REQUIRED_YEAR_HINT_ALGORITHM,
+                classBasedAlgorithm("HINT", PipelineRequiredYearHintShardingAlgorithm.class));
         return rule;
     }
 
@@ -77,6 +84,15 @@ public final class PipelineShardingRuleFactory {
         ShardingTableRuleConfiguration tableRule = new ShardingTableRuleConfiguration(
                 logicTable, yearDataNodes(logicTable, years));
         tableRule.setTableShardingStrategy(new HintShardingStrategyConfiguration(YEAR_HINT_ALGORITHM));
+        return tableRule;
+    }
+
+    private static ShardingTableRuleConfiguration requiredYearHintTableRule(
+            String logicTable, List<Integer> years) {
+        ShardingTableRuleConfiguration tableRule = new ShardingTableRuleConfiguration(
+                logicTable, yearDataNodes(logicTable, years));
+        tableRule.setTableShardingStrategy(
+                new HintShardingStrategyConfiguration(REQUIRED_YEAR_HINT_ALGORITHM));
         return tableRule;
     }
 

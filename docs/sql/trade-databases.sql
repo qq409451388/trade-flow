@@ -1,0 +1,9 @@
+-- Trade Flow 单机 MySQL 数据库初始化。
+CREATE DATABASE IF NOT EXISTS `trade_flow`
+  DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+
+CREATE DATABASE IF NOT EXISTS `trade_pipeline`
+  DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+
+CREATE DATABASE IF NOT EXISTS `trade_analytics`
+  DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;

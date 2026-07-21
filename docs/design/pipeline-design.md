@@ -6,8 +6,8 @@
 `trade_pipeline` 数据库和 ShardingSphere 数据源；读取原始报文时继续通过
 `StorageReader` 使用独立的只读 Storage 数据源。两套数据源、事务管理器和分片规则不得混用。
 
-当前已实现订单 Redis Stream 消费、跨 consumer PEL 回收、Storage 原文读取、富友订单解析、
-订单聚合事务写入及 Ingress ACK。支付事件消费留在后续步骤实现。
+当前已实现订单和支付 Redis Stream 消费、跨 consumer PEL 回收、Storage 原文读取、结构化业务落库、
+独立处理审计、Ingress ACK 和投递耗尽事件主动拉取。
 
 ## 2. 订单事件处理链路
 
@@ -35,6 +35,8 @@
 | `oms_order_item` | `item_create_time` 年份、`order_no` | `oms_order_item_YYYY_00` ～ `_15` |
 | `oms_order_item_spec` | 父订单年份 Hint | `oms_order_item_spec_YYYY` |
 | `oms_order_package_item` | `item_create_time` 年份 | `oms_order_package_item_YYYY` |
+| `oms_payment` | 强制 `routeYear` Hint | `oms_payment_YYYY` |
+| `oms_payment_account` | 与支付主表相同的强制 Hint | `oms_payment_account_YYYY` |
 
 订单商品明细 Hash 使用 `Math.floorMod(order_no, 16)`，负数也能稳定落到 `00`～`15`。
 规格表本身没有业务时间字段，任何新增、修改、按主键查询都必须使用
@@ -47,10 +49,11 @@
 `2026`、`2027`。
 新增年份的顺序固定为：
 
-1. 从 `docs/sql/pipeline.sql` 的最终表结构创建新年度物理表。
-2. 为 `oms_order_item` 创建 `00`～`15` 共 16 张表。
-3. 核对索引和字段一致后，将年份追加到 `trade.pipeline.sharding.years`。
-4. 重启 Pipeline，使 ShardingSphere 重新加载 actual data nodes。
+1. 在 `../sql/trade-pipeline-base-schema.sql` 维护最终基础结构。
+2. 参照 `../sql/trade-pipeline-year-shards.sql` 从基础表创建新年度物理表。
+3. 为 `oms_order_item` 创建 `00`～`15` 共 16 张表。
+4. 核对索引和字段一致后，将年份追加到 `trade.pipeline.sharding.years`。
+5. 重启 Pipeline，使 ShardingSphere 重新加载 actual data nodes。
 
 不得先追加配置再建表，否则对应年份请求会被路由到不存在的物理表。
 
@@ -91,7 +94,12 @@ Pipeline 业务事务显式使用 `pipelineTransactionManager`，不得将 Pipel
 - `POST /order-event/pull` 可按event ID或批量主动拉取Ingress耗尽事件，直接读取Storage并处理，
   成功后ACK Ingress，不经过Redis。
 - Pipeline提供 `/readiness/event-consumer`，按内容类型检查Pipeline数据库、Storage数据源、Redis和consumer group，
-  供Ingress熔断恢复使用。
+供Ingress熔断恢复使用。
+
+支付事件采用相同的可靠投递闭环：`stream:payment-event` + `trade-pipeline-payment` 消费组，处理结果写入
+`pipeline_payment_event_log`。支付流水以 `paySsn` 为不可变幂等键：相同 SHA 为幂等成功，不同 SHA 记为
+`PAYMENT_PAYLOAD_CONFLICT` 且不覆盖原记录。支付主表和结算账户通过同一个强制年份 Hint 路由并在单事务提交；
+支付通道可通过 `POST /payment-event/pull` 主动拉取 Ingress 已耗尽事件。
 
 仍待业务确认：
 

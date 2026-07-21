@@ -5,7 +5,7 @@ import com.mtx.trade.common.enums.ContentType;
 import com.mtx.trade.common.enums.ErrorCode;
 import com.mtx.trade.common.exception.BusinessException;
 import com.mtx.trade.pipeline.config.OrderEventConsumerProperties;
-import com.mtx.trade.pipeline.dto.IngressExhaustedOrderEvent;
+import com.mtx.trade.pipeline.dto.IngressExhaustedEvent;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
@@ -15,11 +15,11 @@ import org.springframework.web.util.UriComponentsBuilder;
 import java.util.Collections;
 import java.util.List;
 
-/** 查询 Ingress 中自动投递已耗尽的事件。 */
+/** 按内容类型查询 Ingress 中自动投递已耗尽的事件。 */
 @Service
 public class IngressExhaustedEventClient {
 
-    private static final ParameterizedTypeReference<ResponseData<List<IngressExhaustedOrderEvent>>> RESPONSE_TYPE =
+    private static final ParameterizedTypeReference<ResponseData<List<IngressExhaustedEvent>>> RESPONSE_TYPE =
             new ParameterizedTypeReference<>() {
             };
 
@@ -36,15 +36,18 @@ public class IngressExhaustedEventClient {
         this.properties = properties;
     }
 
-    public List<IngressExhaustedOrderEvent> list(List<Long> eventIds, int limit) {
+    public List<IngressExhaustedEvent> list(int contentType, List<Long> eventIds, int limit) {
+        if (contentType != ContentType.ORDER.getCode() && contentType != ContentType.PAYMENT.getCode()) {
+            throw new BusinessException(ErrorCode.PARAM_INVALID, "不支持的事件类型: " + contentType);
+        }
         UriComponentsBuilder uriBuilder = UriComponentsBuilder
                 .fromUriString(properties.getIngressExhaustedUrl())
-                .queryParam("contentType", ContentType.ORDER.getCode())
+                .queryParam("contentType", contentType)
                 .queryParam("limit", limit);
         if (eventIds != null && !eventIds.isEmpty()) {
             uriBuilder.queryParam("eventIds", eventIds.toArray());
         }
-        ResponseData<List<IngressExhaustedOrderEvent>> response = restClient.get()
+        ResponseData<List<IngressExhaustedEvent>> response = restClient.get()
                 .uri(uriBuilder.build(true).toUri())
                 .retrieve()
                 .body(RESPONSE_TYPE);

@@ -22,27 +22,37 @@ public class EventConsumerReadinessService {
     private final DataSource pipelineDataSource;
     private final DataSource storageDataSource;
     private final StringRedisTemplate redisTemplate;
-    private final ObjectProvider<OrderEventStreamConsumer> consumerProvider;
+    private final ObjectProvider<OrderEventStreamConsumer> orderConsumerProvider;
+    private final ObjectProvider<PaymentEventStreamConsumer> paymentConsumerProvider;
 
     public EventConsumerReadinessService(
             @Qualifier("pipelineActualDataSource") DataSource pipelineDataSource,
             @Qualifier("storageActualDataSource") DataSource storageDataSource,
             StringRedisTemplate redisTemplate,
-            ObjectProvider<OrderEventStreamConsumer> consumerProvider) {
+            ObjectProvider<OrderEventStreamConsumer> orderConsumerProvider,
+            ObjectProvider<PaymentEventStreamConsumer> paymentConsumerProvider) {
         this.pipelineDataSource = pipelineDataSource;
         this.storageDataSource = storageDataSource;
         this.redisTemplate = redisTemplate;
-        this.consumerProvider = consumerProvider;
+        this.orderConsumerProvider = orderConsumerProvider;
+        this.paymentConsumerProvider = paymentConsumerProvider;
     }
 
     public EventConsumerReadinessVO check(Integer contentType) {
         Map<String, Boolean> checks = new LinkedHashMap<>();
-        checks.put("contentTypeSupported", contentType != null && contentType == ContentType.ORDER.getCode());
+        boolean order = contentType != null && contentType == ContentType.ORDER.getCode();
+        boolean payment = contentType != null && contentType == ContentType.PAYMENT.getCode();
+        checks.put("contentTypeSupported", order || payment);
         checks.put("pipelineDatabase", databaseReady(pipelineDataSource));
         checks.put("storageDatabase", databaseReady(storageDataSource));
         checks.put("redis", redisReady());
-        OrderEventStreamConsumer consumer = consumerProvider.getIfAvailable();
-        checks.put("orderConsumerGroup", consumer != null && consumer.isReady());
+        if (order) {
+            OrderEventStreamConsumer consumer = orderConsumerProvider.getIfAvailable();
+            checks.put("orderConsumerGroup", consumer != null && consumer.isReady());
+        } else if (payment) {
+            PaymentEventStreamConsumer consumer = paymentConsumerProvider.getIfAvailable();
+            checks.put("paymentConsumerGroup", consumer != null && consumer.isReady());
+        }
         return new EventConsumerReadinessVO(checks.values().stream().allMatch(Boolean.TRUE::equals), checks);
     }
 
