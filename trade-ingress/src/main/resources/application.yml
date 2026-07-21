@@ -53,6 +53,7 @@ trade:
       sql-show: false
   stream:
     order-event-key: stream:order-event
+    payment-event-key: stream:payment-event
   thirdparty:
     fuiou:
       order-payload:
