@@ -9,6 +9,8 @@
 3. 多数据源必须使用明确的 bean 名、`SqlSessionFactory` 和事务管理器绑定，禁止公共模块抢占通用 `dataSource` 或依赖 `@Primary` 猜测 Mapper 归属。
 4. Storage 的 `id % 100` 是稳定虚拟分片契约。扩容时迁移或重新分配 `_00 ~ _99` 逻辑桶，禁止改成 `id % 数据库实例数`。
 5. 当前阶段只采用进程内 Java adapter 直连单台 MySQL；未经明确设计评审，不新增独立 Storage 服务、RPC 或分布式中间件。
+6. 第三方消息版本必须由来源 adapter 从报文中提取并转换为非负 `long`；event 幂等键必须包含来源、业务事件键和消息版本，消费端不得用 event 自增 ID 代替消息版本判断新旧。
+7. Storage 主键由 storage 领域生成器显式生成一次，`trade_storage.id` 与 `trade_storage_blob.id` 必须严格相等；两次写入任一失败必须抛异常并回滚，禁止依赖 MyBatis-Plus 自动为两张表分别生成 ID。
 
 ## MyBatis-Plus 使用规范
 1. 后端新增数据库表对应的 DO/Mapper 时，应同步新增 `com.mtx.trade.service.db.XxxDbService` 和 `com.mtx.trade.service.db.impl.XxxDbServiceImpl`。

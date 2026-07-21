@@ -20,7 +20,9 @@ public enum ErrorCode {
     UNAUTHORIZED(401, "未登录或登录已过期"),
     FORBIDDEN(403, "无权限访问"),
     NOT_FOUND(404, "资源不存在"),
-    BUSINESS_ERROR(1000, "业务异常");
+    BUSINESS_ERROR(1000, "业务异常"),
+    DATA_CREATE_ERROR(1001, "数据操作异常")
+    ;
 
     private final int code;
     private final String message;

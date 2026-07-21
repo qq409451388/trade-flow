@@ -32,13 +32,24 @@ global-id:
   domains:
     - order
     - payment
+    - storage
 
 trade:
   storage:
     local:
       enabled: true
       sql-show: false
-
+  stream:
+    order-event-key: stream:order-event
+  thirdparty:
+    fuiou:
+      order-payload:
+        # Jackson JSON Pointer；按富友实际报文字段调整
+        event-key-pointer: /keySign
+        message-version-pointer: /recUpdTm # 订单最近完成时间	时间戳(毫秒)
+      payment-payload:
+        event-key-pointer: /paySsn
+        message-version-pointer: /paySsn # 订单最近完成时间	时间戳(毫秒)
 management:
   endpoints:
     web:

@@ -8,7 +8,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  * 交易流水处理服务启动类。
  */
 @SpringBootApplication
-@MapperScan("com.mtx.trade.pipeline.mapper")
+@MapperScan(basePackages = "com.mtx.trade.pipeline.mapper", sqlSessionFactoryRef = "sqlSessionFactory")
 public class TradePipelineApplication {
 
     public static void main(String[] args) {

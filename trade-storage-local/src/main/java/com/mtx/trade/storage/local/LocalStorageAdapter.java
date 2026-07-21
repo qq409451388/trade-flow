@@ -1,9 +1,9 @@
 package com.mtx.trade.storage.local;
 
-import com.mtx.trade.storage.api.StorageMetadata;
-import com.mtx.trade.storage.api.StorageReader;
+import com.mtx.trade.storage.api.StorageIdGenerator;
 import com.mtx.trade.storage.api.StorageRef;
 import com.mtx.trade.storage.api.StorageWriteCommand;
+import com.mtx.trade.storage.api.StorageWriteException;
 import com.mtx.trade.storage.api.StorageWriter;
 import com.mtx.trade.storage.local.entity.StorageBlobDO;
 import com.mtx.trade.storage.local.entity.StorageDO;
@@ -18,12 +18,13 @@ import java.time.LocalDateTime;
 
 /** 单机 MySQL Storage adapter。 */
 @RequiredArgsConstructor
-public class LocalStorageAdapter implements StorageWriter, StorageReader {
+public class LocalStorageAdapter implements StorageWriter {
 
     private static final int BLOB_STORAGE_TYPE = 1;
 
     private final StorageDbService storageDbService;
     private final StorageBlobDbService storageBlobDbService;
+    private final StorageIdGenerator storageIdGenerator;
 
     @Override
     @Transactional(transactionManager = "storageTransactionManager", rollbackFor = Exception.class)
@@ -34,7 +35,12 @@ public class LocalStorageAdapter implements StorageWriter, StorageReader {
 
         byte[] content = command.content();
         byte[] sha256 = sha256(content);
+        long storageId = storageIdGenerator.nextId();
+        if (storageId <= 0) {
+            throw new StorageWriteException("storage 域 ID 生成失败");
+        }
         StorageDO storage = new StorageDO();
+        storage.setId(storageId);
         storage.setSourceSystem(command.sourceSystem());
         storage.setContentType(command.contentType());
         storage.setPayloadSha256(sha256);
@@ -44,42 +50,17 @@ public class LocalStorageAdapter implements StorageWriter, StorageReader {
         storage.setContentOffset(0L);
         storage.setContentLength(content.length);
         storage.setReceivedTime(command.receivedTime() == null ? LocalDateTime.now() : command.receivedTime());
-        storageDbService.save(storage);
+        if (!storageDbService.save(storage)) {
+            throw new StorageWriteException("storage 元数据写入失败");
+        }
 
         StorageBlobDO blob = new StorageBlobDO();
-        blob.setId(storage.getId());
+        blob.setId(storageId);
         blob.setContent(content);
-        storageBlobDbService.save(blob);
-        return new StorageRef(storage.getId(), sha256, content.length);
-    }
-
-    @Override
-    @Transactional(transactionManager = "storageTransactionManager", readOnly = true)
-    public StorageMetadata getMetadata(Long storageId) {
-        if (storageId == null) {
-            return null;
+        if (!storageBlobDbService.save(blob)) {
+            throw new StorageWriteException("storage BLOB 写入失败");
         }
-        StorageDO storage = storageDbService.getById(storageId);
-        if (storage == null) {
-            return null;
-        }
-        return new StorageMetadata(
-                storage.getId(),
-                storage.getSourceSystem(),
-                storage.getContentType(),
-                storage.getPayloadSha256(),
-                storage.getPayloadLength(),
-                storage.getReceivedTime());
-    }
-
-    @Override
-    @Transactional(transactionManager = "storageTransactionManager", readOnly = true)
-    public byte[] getContent(Long storageId) {
-        if (storageId == null) {
-            return null;
-        }
-        StorageBlobDO blob = storageBlobDbService.getById(storageId);
-        return blob == null || blob.getContent() == null ? null : blob.getContent().clone();
+        return new StorageRef(storageId, sha256, content.length);
     }
 
     private static byte[] sha256(byte[] content) {

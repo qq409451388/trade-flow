@@ -1,5 +1,6 @@
 package com.mtx.trade.receiver.service;
 
+import com.mtx.trade.receiver.dto.EventIngestResult;
 import com.mtx.trade.receiver.entity.OrderEventDO;
 
 /**
@@ -12,11 +13,13 @@ public interface OrderEventService {
      *
      * @param sourceSystem  来源系统
      * @param thirdEventKey 第三方事件唯一键
+     * @param messageVersion 第三方消息版本
      * @param rawId         关联trade_storage.id
      * @param payloadSha256 原始请求体字节SHA-256
      * @return 保存后的订单事件
      */
-    OrderEventDO createEvent(int sourceSystem, String thirdEventKey, Long rawId, byte[] payloadSha256);
+    EventIngestResult<OrderEventDO> createEvent(
+            int sourceSystem, String thirdEventKey, long messageVersion, Long rawId, byte[] payloadSha256);
 
     /**
      * 根据主键查询订单事件。

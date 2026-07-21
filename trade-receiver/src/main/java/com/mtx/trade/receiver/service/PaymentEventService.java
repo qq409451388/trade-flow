@@ -1,5 +1,6 @@
 package com.mtx.trade.receiver.service;
 
+import com.mtx.trade.receiver.dto.EventIngestResult;
 import com.mtx.trade.receiver.entity.PaymentEventDO;
 
 /**
@@ -12,11 +13,13 @@ public interface PaymentEventService {
      *
      * @param sourceSystem  来源系统
      * @param eventKey      事件唯一键
+     * @param messageVersion 第三方消息版本
      * @param rawId         关联trade_storage.id
      * @param payloadSha256 原始请求体字节SHA-256
      * @return 保存后的支付事件
      */
-    PaymentEventDO createEvent(int sourceSystem, String eventKey, Long rawId, byte[] payloadSha256);
+    EventIngestResult<PaymentEventDO> createEvent(
+            int sourceSystem, String eventKey, long messageVersion, Long rawId, byte[] payloadSha256);
 
     /**
      * 根据主键查询支付事件。

@@ -30,7 +30,7 @@ trade-pipeline ─┘                         ├─ MyBatis-Plus
 trade-common：DTO、异常、枚举、ID 等轻量公共能力
 ```
 
-- `trade-storage-api` 只包含 `StorageWriter`、`StorageReader`、Command 和 DTO，零持久化框架依赖。
+- `trade-storage-api` 只包含 `StorageWriter`、`StorageReader`、`StorageIdGenerator`、Command 和 DTO，零持久化框架依赖。
 - `trade-storage-local` 包含 DO、Mapper、DB Service、本地 adapter、命名数据源及 Storage 分表规则。
 - `trade-common` 不再传递 ShardingSphere/Hikari，也不再自动扫描 Storage Mapper。
 - receiver 通过 `StorageWriter` 写入；pipeline 的后续消费代码只能通过 `StorageReader` 读取。
@@ -39,10 +39,13 @@ trade-common：DTO、异常、枚举、ID 等轻量公共能力
 ## 3. 数据与分片契约
 
 - 逻辑表：`trade_storage`、`trade_storage_blob`。
-- 两张表共享同一个 `id`。
+- receiver 通过 common 的 `IdGeneratorRegistry.forDomain("storage")` 生成一次 storage 领域雪花 ID。
+- `trade_storage.id = trade_storage_blob.id`：两张表必须复用这一次生成的同一个 ID，禁止分别生成。
+- 两个 DO 的主键均使用 `IdType.INPUT`，Storage 持久化不走 MyBatis-Plus 全局 ID 自动填充。
 - 虚拟分片编号固定为 `id % 100`，物理表后缀为 `_00` 到 `_99`。
 - 两张逻辑表为 binding tables，同一 id 必须路由到相同后缀。
 - `LocalStorageAdapter.put` 在 `storageTransactionManager` 事务中同时写元数据和 BLOB。
+- metadata 或 BLOB 任一 `save` 返回 `false` 时主动抛出 `StorageWriteException`，整个事务回滚；receiver 将异常转换为富友失败响应。
 - 虚拟分片数量 100 是稳定契约。未来拆 MySQL 实例时只重新分配 00~99 逻辑桶，禁止改为 `id % 实例数`。
 
 建表脚本当前见 `docs/sql/trade_receiver_storage分表创建.sql`。该脚本依赖预先存在的模板表 `trade_storage` 和 `trade_storage_blob`。
@@ -92,12 +95,21 @@ byte[] getContent(Long storageId);
 
 `StorageRef` 只携带 `storageId`、SHA-256 和内容长度，可用于后续任务或消息。字节数组 DTO 做防御性复制，避免调用方修改 adapter 内部数据。
 
+common 当前的领域生成器共享同一个 `SnowflakeIdEngine`，因此 storage 领域 ID 与其他领域仍保持全局唯一；
+“storage 域”表示调用和所有权边界，不代表独立号段或独立雪花参数。若未来需要独立号段，应新增独立引擎配置，不能只修改领域名称。
+
 ## 6. 当前暂不实施
 
 - 不启动第三个 Storage Boot，不设计远程接口实现。
 - 不引入注册中心、分布式事务、分布式锁或多 MySQL 实例。
 - 不实施 pipeline 时间分表；需先确定逻辑表、分片时间字段、按日或按月及保留周期。
 - 不实施 Outbox、幂等 requestId、CDC 迁移和 OSS 存储；这些属于服务化或可靠消息阶段。
+
+## 6.1 与 Event 消息版本的关系
+
+Storage 始终保存通过验签且业务键/版本格式有效的原始报文，不负责判断第三方消息的新旧。
+receiver 会为每个新消息版本生成 event；重复版本可能已经写入 Storage，但不会重复生成或发布 event。
+这是为了保持 Storage 写入端口简单且原始数据可审计，后续可通过保留策略清理未引用内容。
 
 ## 7. 后续演进约束
 

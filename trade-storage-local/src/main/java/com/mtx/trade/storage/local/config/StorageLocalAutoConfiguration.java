@@ -5,8 +5,10 @@ import com.baomidou.mybatisplus.autoconfigure.MybatisPlusProperties;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean;
 import com.mtx.trade.storage.api.StorageReader;
+import com.mtx.trade.storage.api.StorageIdGenerator;
 import com.mtx.trade.storage.api.StorageWriter;
 import com.mtx.trade.storage.local.LocalStorageAdapter;
+import com.mtx.trade.storage.local.LocalStorageReaderAdapter;
 import com.mtx.trade.storage.local.service.db.StorageBlobDbService;
 import com.mtx.trade.storage.local.service.db.StorageDbService;
 import com.mtx.trade.storage.local.service.db.impl.StorageBlobDbServiceImpl;
@@ -20,6 +22,7 @@ import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
@@ -42,7 +45,7 @@ import java.util.Properties;
  * <p>仅当显式配置 {@code trade.storage.local.enabled=true} 时启用。所有 bean 均使用 storage 前缀命名，
  * 不抢占应用的 {@code dataSource}/{@code sqlSessionFactory}。</p>
  */
-@AutoConfiguration(after = DataSourceAutoConfiguration.class, before = MybatisPlusAutoConfiguration.class)
+@AutoConfiguration(after = {DataSourceAutoConfiguration.class, MybatisPlusAutoConfiguration.class})
 @ConditionalOnClass({ShardingSphereDataSourceFactory.class, MybatisSqlSessionFactoryBean.class})
 @ConditionalOnProperty(prefix = "trade.storage.local", name = "enabled", havingValue = "true")
 @EnableConfigurationProperties({StorageLocalProperties.class, StorageDataSourceProperties.class})
@@ -114,10 +117,20 @@ public class StorageLocalAutoConfiguration {
     }
 
     @Bean
-    @ConditionalOnMissingBean({StorageWriter.class, StorageReader.class})
-    public LocalStorageAdapter localStorageAdapter(
+    @ConditionalOnMissingBean(StorageReader.class)
+    public LocalStorageReaderAdapter localStorageReaderAdapter(
             StorageDbService storageDbService,
             StorageBlobDbService storageBlobDbService) {
-        return new LocalStorageAdapter(storageDbService, storageBlobDbService);
+        return new LocalStorageReaderAdapter(storageDbService, storageBlobDbService);
+    }
+
+    @Bean
+    @ConditionalOnBean(StorageIdGenerator.class)
+    @ConditionalOnMissingBean(StorageWriter.class)
+    public LocalStorageAdapter localStorageAdapter(
+            StorageDbService storageDbService,
+            StorageBlobDbService storageBlobDbService,
+            StorageIdGenerator storageIdGenerator) {
+        return new LocalStorageAdapter(storageDbService, storageBlobDbService, storageIdGenerator);
     }
 }

@@ -17,7 +17,7 @@ public class StorageDO implements Serializable {
     @Serial
     private static final long serialVersionUID = 1L;
 
-    @TableId(type = IdType.ASSIGN_ID)
+    @TableId(type = IdType.INPUT)
     private Long id;
     private Integer sourceSystem;
     private Integer contentType;

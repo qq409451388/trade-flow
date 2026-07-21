@@ -5,7 +5,7 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication
-@MapperScan("com.mtx.trade.receiver.mapper")
+@MapperScan(basePackages = "com.mtx.trade.receiver.mapper", sqlSessionFactoryRef = "sqlSessionFactory")
 public class TradeReceiverApplication {
     public static void main(String[] args) {
         SpringApplication.run(TradeReceiverApplication.class, args);

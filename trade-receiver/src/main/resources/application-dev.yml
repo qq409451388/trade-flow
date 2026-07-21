@@ -28,6 +28,9 @@ spring:
           max-wait: 3s
 
 trade:
+  thirdparty:
+    fuiou:
+      secret: rFXFhj8Z6GA96NQDqgg3N4djE0Dp54nj
   storage:
     local:
       sql-show: true

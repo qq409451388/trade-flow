@@ -36,6 +36,11 @@ public class OrderEventDO implements Serializable {
     private String thirdEventKey;
 
     /**
+     * 第三方消息版本，来源适配器统一转换为非负整数
+     */
+    private Long messageVersion;
+
+    /**
      * 关联trade_storage.id
      */
     private Long rawId;
