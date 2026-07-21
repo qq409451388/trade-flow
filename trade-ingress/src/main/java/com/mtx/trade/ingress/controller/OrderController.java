@@ -1,0 +1,124 @@
+package com.mtx.trade.ingress.controller;
+
+import com.mtx.trade.common.dto.ResponseData;
+import com.mtx.trade.common.enums.ContentType;
+import com.mtx.trade.common.enums.ErrorCode;
+import com.mtx.trade.common.exception.BusinessException;
+import com.mtx.trade.ingress.common.enums.SourceSystem;
+import com.mtx.trade.ingress.dto.EventIngestResult;
+import com.mtx.trade.ingress.dto.FuiouResponse;
+import com.mtx.trade.ingress.dto.ParsedEventVersion;
+import com.mtx.trade.ingress.entity.OrderEventDO;
+import com.mtx.trade.ingress.service.EventDeliveryService;
+import com.mtx.trade.ingress.service.FuiouOrderPayloadParser;
+import com.mtx.trade.ingress.service.OrderEventService;
+import com.mtx.trade.ingress.service.StorageWriteService;
+import com.mtx.trade.ingress.utils.FuiouSignUtils;
+import com.mtx.trade.storage.api.*;
+import jakarta.annotation.Resource;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
+import java.util.HexFormat;
+
+@Slf4j
+@RestController
+@RequestMapping("/order")
+public class OrderController {
+    @Resource
+    private StorageReader storageReader;
+    @Resource
+    private StorageWriteService storageWriteService;
+    @Resource
+    private OrderEventService orderEventService;
+    @Resource
+    private EventDeliveryService eventDeliveryService;
+    @Resource
+    private FuiouOrderPayloadParser fuiouOrderPayloadParser;
+    @Value("${trade.thirdparty.fuiou.secret}")
+    private String secret;
+
+    @GetMapping("/storage-metadata")
+    public ResponseData<StorageMetadata> storageMetadata(
+            @RequestParam Long storageId, @RequestParam String storageSha256) {
+        return ResponseData.success(storageReader.getMetadata(
+                new StorageKey(storageId, parseSha256(storageSha256))));
+    }
+
+    @PostMapping("/store-push")
+    public FuiouResponse storePush(@RequestBody String payload) {
+        OrderEventDO eventDO = null;
+        try {
+            FuiouSignUtils.FuiouSignParts fuiouSignParts = FuiouSignUtils.parseSign(payload);
+            boolean verifyResult = FuiouSignUtils.verifySign(fuiouSignParts, secret);
+            if (!verifyResult) {
+                return FuiouResponse.fail("verify sign failed.");
+            }
+            StorageRef storageRef = this.writeStorage(payload);
+            eventDO = this.createEvent(payload, storageRef);
+            return FuiouResponse.ok();
+        } catch (StorageWriteException e) {
+            log.warn("storage write failed", e);
+            return FuiouResponse.fail(ErrorCode.DATA_CREATE_ERROR.getMessage());
+        } catch (BusinessException e) {
+            return FuiouResponse.fail(e.getMessage());
+        } catch (Exception e) {
+            log.error("store push exception, msg:{}", e.getMessage(), e);
+            return FuiouResponse.fail(ErrorCode.SYSTEM_ERROR.getMessage());
+        } finally {
+            this.publishOrderEvent(eventDO);
+        }
+    }
+
+    private StorageRef writeStorage(String payload) {
+        StorageWriteCommand storageWriteCommand = new StorageWriteCommand(
+                SourceSystem.FUIOU.getCode(),
+                ContentType.ORDER.getCode(), payload.getBytes(StandardCharsets.UTF_8), LocalDateTime.now()
+        );
+        return storageWriteService.putIfAbsent(storageWriteCommand);
+    }
+
+    private OrderEventDO createEvent(String payload, StorageRef storageRef) {
+        OrderEventDO eventDO = null;
+        ParsedEventVersion parsedEvent = fuiouOrderPayloadParser.parse(payload);
+        EventIngestResult<OrderEventDO> ingestResult = orderEventService.createEvent(
+                SourceSystem.FUIOU.getCode(),
+                parsedEvent.eventKey(),
+                parsedEvent.messageVersion(),
+                storageRef.storageId(),
+                storageRef.sha256());
+        if (ingestResult.accepted()) {
+            eventDO = ingestResult.event();
+        }
+        return eventDO;
+    }
+
+    private void publishOrderEvent(OrderEventDO eventDO) {
+        if (eventDO != null) {
+            try {
+                eventDeliveryService.deliverOrderEvent(eventDO);
+            } catch (Exception e) {
+                log.warn("stream publish failed, eventId={}", eventDO.getId(), e);
+            }
+        }
+    }
+
+    private static byte[] parseSha256(String value) {
+        try {
+            if (value == null || value.length() != 64) {
+                throw new IllegalArgumentException("invalid length");
+            }
+            return HexFormat.of().parseHex(value);
+        } catch (IllegalArgumentException e) {
+            throw new BusinessException(ErrorCode.PARAM_INVALID, "storageSha256 必须为64位十六进制字符串");
+        }
+    }
+}

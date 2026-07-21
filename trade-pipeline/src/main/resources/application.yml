@@ -1,6 +1,8 @@
 spring:
   application:
     name: trade-pipeline
+  servlet:
+    context-path: /trade-pipeline
   profiles:
     active: dev
   jackson:

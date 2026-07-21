@@ -1,0 +1,77 @@
+server:
+  port: 8115
+  servlet:
+    context-path: /trade-ingress
+
+spring:
+  application:
+    name: trade-ingress
+  profiles:
+    active: dev
+  jackson:
+    default-property-inclusion: non_null
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: GMT+8
+
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  type-aliases-package: com.mtx.trade.ingress.entity
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.nologging.NoLoggingImpl #org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    db-config:
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+global-id:
+  enabled: true
+  snowflake:
+    datacenter-id: ${GLOBAL_ID_DATACENTER_ID:1}
+    worker-id: ${GLOBAL_ID_WORKER_ID:1}
+    max-clock-backward-ms: 5
+  domains:
+    storage:
+      independent: true
+      datacenter-id: ${STORAGE_ID_DATACENTER_ID:2}
+      worker-id: ${STORAGE_ID_WORKER_ID:1}
+
+trade:
+  ingress:
+    event-delivery:
+      retry-delays: 1m,5m,10m
+      stale-after: 15m
+      scan-cron: "0 */15 * * * *"
+      batch-size: 500
+      max-batches: 20
+      max-auto-redeliveries: 2
+      scan-lock-lease: 14m # 多个 Ingress 实例会同时触发定时任务，但只有取得 Redis 锁的实例执行扫描。设置为14分钟是因为扫描间隔为15分钟
+  storage:
+    local:
+      enabled: true
+      sql-show: false
+  stream:
+    order-event-key: stream:order-event
+  thirdparty:
+    fuiou:
+      order-payload:
+        # Jackson JSON Pointer；按富友实际报文字段调整
+        event-key-pointer: /keySign
+        message-version-pointer: /recUpdTm # 订单最近完成时间	时间戳(毫秒)
+      payment-payload:
+        event-key-pointer: /paySsn
+        message-version-pointer: /paySsn # 订单最近完成时间	时间戳(毫秒)
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    com.mtx.trade: debug
+    org.springframework.web: info
