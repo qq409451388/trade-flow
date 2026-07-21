@@ -10,6 +10,7 @@ public record EventDeliveryVO(
         String thirdEventKey,
         Long messageVersion,
         Long storageId,
+        String storageSha256,
         Integer autoRedeliveryCount,
         LocalDateTime lastRedeliveryTime,
         LocalDateTime createTime) {

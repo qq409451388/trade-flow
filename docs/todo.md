@@ -242,7 +242,7 @@ trade:
 - [x] 新增稳定的 `StorageWriter`、`StorageReader`、Command/DTO。
 - [x] 将当前 `StorageServiceImpl` 改造为本地 adapter，实现上述端口。
 - [x] ingress 写入流程只注入 `StorageWriter`；临时查询端点只注入 `StorageReader`。
-- [ ] pipeline 后续读取流程只注入 `StorageReader`。
+- [x] pipeline 订单事件读取流程只注入 `StorageReader`。
 - [x] 业务代码不再返回或传递 StorageDO。
 - [x] 保持 ingress、pipeline 两个 Boot，仍直连同一台 MySQL Server。
 
@@ -252,7 +252,7 @@ trade:
 - [ ] 抽取通用 ShardingSphere 数据源装配层。
 - [ ] 抽取 `ShardingRuleContributor` 扩展点。
 - [ ] storage 注册 SHA-256 分表 contributor。
-- [ ] pipeline 注册时间分表 contributor。
+- [x] pipeline 注册订单年度及商品明细 Hash 分表规则（当前直接装配，通用 contributor 后续再抽取）。
 - [x] pipeline 使用默认 pipeline `dataSource` 和命名 `storageDataSource` 两套数据源。
 - [x] Storage Mapper 明确绑定 `storageSqlSessionFactory`；业务 Mapper 继续绑定默认 factory。
 - [x] ShardingSphere/Hikari 不再由轻量 `trade-common` 无条件传递。
@@ -260,11 +260,11 @@ trade:
 
 ### 阶段 C：确定 pipeline 时间分表契约
 
-- [ ] 确定逻辑表及时间分片列。
-- [ ] 确定按日或按月分表。
-- [ ] 定义所有查询必须携带时间范围的约束，避免全分片扫描。
-- [ ] 设计提前建表、历史表归档、保留周期和跨周期查询策略。
-- [ ] 按 `AGENTS.md` 要求在 `docs/sql` 新增当日命名的 SQL 文件。
+- [x] 确定订单逻辑表及时间/Hash 分片列，详见 `docs/pipeline-design.md`。
+- [x] 订单表确定按年分表，商品明细在年度内按 `order_no` 模16。
+- [x] 定义查询携带时间范围或父订单年份 Hint 的约束，避免全分片扫描。
+- [ ] 设计历史表归档、保留周期和跨周期查询策略。
+- [x] 按 `AGENTS.md` 要求新增 `docs/sql/trade-pipeline-2026-07-21.sql`。
 
 ### 阶段 D：为服务化做准备
 

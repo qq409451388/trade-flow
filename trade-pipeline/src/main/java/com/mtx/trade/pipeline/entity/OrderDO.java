@@ -1,0 +1,130 @@
+package com.mtx.trade.pipeline.entity;
+
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableName;
+import lombok.Data;
+
+import java.io.Serial;
+import java.io.Serializable;
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+
+/** 富友订单当前快照。 */
+@Data
+@TableName("oms_order")
+public class OrderDO implements Serializable {
+
+    @Serial
+    private static final long serialVersionUID = 1L;
+
+    @TableId(type = IdType.INPUT)
+    private Long id;
+    private Long orderNo;
+    private Long userId;
+    private String mchntCd;
+    private Long shopId;
+    private Long expressId;
+    private String tmFuiouId;
+    private String termName;
+    private String orderType;
+    private String channelType;
+    private String orderState;
+    private Integer orderPayState;
+    private Integer expressState;
+    private Long orderAmt;
+    private Long orderDisAmt;
+    private Long payAmt;
+    private Long payAmtExtra;
+    private Long cashReceivedAmt;
+    private Long refundAmt;
+    private Long expressAmt;
+    private Long mchntExpressCost;
+    private Long lunchBoxFee;
+    private Long invoiceAmt;
+    private Long thirdMchntIncome;
+    private LocalDateTime orderCreateTime;
+    private LocalDateTime payDeadlineTime;
+    private LocalDateTime payTime;
+    private LocalDateTime cashierConfirmTime;
+    private LocalDateTime deliveryStartTime;
+    private LocalDateTime commentTime;
+    private LocalDateTime finishTime;
+    private LocalDateTime sourceUpdateTime;
+    private LocalDateTime refundTime;
+    private LocalDateTime openTableTime;
+    private LocalDateTime mealTime;
+    private LocalDateTime estimatedFinishTime;
+    private LocalDateTime reverseTime;
+    private String deliverTimeDesc;
+    private String paySsn;
+    private String payType;
+    private String payTypeExtra;
+    private String thirdOrderNo;
+    private String appOpenId;
+    private String outUserId;
+    private String mealCode;
+    private String userMemo;
+    private String orderCancelReason;
+    private String orderComment;
+    private Integer commentState;
+    private String commentLevel;
+    private Long orderAddrId;
+    private String phone;
+    private String contactMobile;
+    private String expressCompany;
+    private String cashierId;
+    private Long cashierDisAmt;
+    private Long singleGoodsDisAmt;
+    private Long fullOrderDisAmt;
+    private BigDecimal cashierDiscount;
+    private Long cashierDisId;
+    private String cashierDisName;
+    private String discountType;
+    private String discountTypeExtra;
+    private Long couponId;
+    private Long couponRealId;
+    private String specialCouponId;
+    private String specialMchntType;
+    private Long integral;
+    private Long integralDeductionAmt;
+    private Long couponAmt;
+    private Long fullMinusAmt;
+    private Long memberLevelDisAmt;
+    private Long memberPriceDisAmt;
+    private Long memberDayDisAmt;
+    private Long unionpayDisAmt;
+    private Long timesCardDisAmt;
+    private Long packagePriceDisAmt;
+    private Long groupPayDisAmt;
+    private Long platHongBao;
+    private Long wipeZeroAmt;
+    private Long notInDiscountAmt;
+    private Long freeConsumeAmt;
+    private Long fixedPriceAmt;
+    private Integer groupPayNum;
+    private Integer groupPayNumExtra;
+    private Integer isMembership;
+    private Integer isMealOrder;
+    private Integer isOrderLocked;
+    private Integer hasReverse;
+    private Integer isPadConfirm;
+    private Integer isAccountOrder;
+    private Integer printSettleStatus;
+    private Integer thirdBasketStatus;
+    private Integer invoiceState;
+    private Integer mqttSendState;
+    private String mealConfirmChannel;
+    private String tableFuiouId;
+    private String tableTermName;
+    private String promoterNo;
+    private String accountMemo;
+    private String memberPhone;
+    private String memberName;
+    private Long memberPoints;
+    private Long userBalance;
+    private Integer guestsCount;
+    private Integer orderVersion;
+    private LocalDateTime createTime;
+    private LocalDateTime updateTime;
+}

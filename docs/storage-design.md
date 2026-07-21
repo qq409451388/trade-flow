@@ -114,7 +114,7 @@ storage 领域配置为独立 `SnowflakeIdEngine`，拥有自己的毫秒内 seq
 
 - 不启动第三个 Storage Boot，不设计远程接口实现。
 - 不引入注册中心、分布式事务、分布式锁或多 MySQL 实例。
-- 不实施 pipeline 时间分表；需先确定逻辑表、分片时间字段、按日或按月及保留周期。
+- Pipeline 订单分表已独立实现，具体规则见 `docs/pipeline-design.md`；Storage 不得引用或复用该规则。
 - 不实施 Outbox、幂等 requestId、CDC 迁移和 OSS 存储；这些属于服务化或可靠消息阶段。
 
 ## 6.1 与 Event 消息版本的关系

@@ -33,27 +33,36 @@ public class PaymentController {
     private EventDeliveryService eventDeliveryService;
     @Resource
     private FuiouPaymentPayloadParser fuiouPaymentPayloadParser;
+    @Resource
+    private EventIngestFailureLogService eventIngestFailureLogService;
     @Value("${trade.thirdparty.fuiou.secret}")
     private String secret;
 
     @PostMapping("/store-push")
     public FuiouResponse storePush(@RequestBody String payload) {
         PaymentEventDO eventDO = null;
+        StorageRef storageRef = null;
+        ParsedEventVersion parsedEvent = null;
+        String failureStage = EventIngestFailureLogService.STAGE_EVENT_FIELD_PARSE;
         try {
             FuiouSignUtils.FuiouSignParts fuiouSignParts = FuiouSignUtils.parseSign(payload);
             boolean verifyResult = FuiouSignUtils.verifySign(fuiouSignParts, secret);
             if (!verifyResult) {
                 return FuiouResponse.fail("verify sign failed.");
             }
-            StorageRef storageRef = this.writeStorage(payload);
-            eventDO = this.createEvent(payload, storageRef);
+            storageRef = this.writeStorage(payload);
+            parsedEvent = fuiouPaymentPayloadParser.parse(payload);
+            failureStage = EventIngestFailureLogService.STAGE_EVENT_PERSIST;
+            eventDO = this.createEvent(parsedEvent, storageRef);
             return FuiouResponse.ok();
         } catch (StorageWriteException e) {
             log.warn("storage write failed", e);
             return FuiouResponse.fail(ErrorCode.DATA_CREATE_ERROR.getMessage());
         } catch (BusinessException e) {
+            this.recordEventFailure(storageRef, failureStage, parsedEvent, e);
             return FuiouResponse.fail(e.getMessage());
         } catch (Exception e) {
+            this.recordEventFailure(storageRef, failureStage, parsedEvent, e);
             log.error("store push exception, msg:{}", e.getMessage(), e);
             return FuiouResponse.fail(ErrorCode.SYSTEM_ERROR.getMessage());
         } finally {
@@ -69,9 +78,8 @@ public class PaymentController {
         return storageWriteService.putIfAbsent(storageWriteCommand);
     }
 
-    private PaymentEventDO createEvent(String payload, StorageRef storageRef) {
+    private PaymentEventDO createEvent(ParsedEventVersion parsedEvent, StorageRef storageRef) {
         PaymentEventDO eventDO = null;
-        ParsedEventVersion parsedEvent = fuiouPaymentPayloadParser.parse(payload);
         EventIngestResult<PaymentEventDO> ingestResult = paymentEventService.createEvent(
                 SourceSystem.FUIOU.getCode(),
                 parsedEvent.eventKey(),
@@ -82,6 +90,24 @@ public class PaymentController {
             eventDO = ingestResult.event();
         }
         return eventDO;
+    }
+
+    private void recordEventFailure(
+            StorageRef storageRef,
+            String failureStage,
+            ParsedEventVersion parsedEvent,
+            Throwable failure) {
+        if (storageRef == null) {
+            return;
+        }
+        try {
+            eventIngestFailureLogService.recordFailure(
+                    SourceSystem.FUIOU.getCode(), ContentType.PAYMENT.getCode(), storageRef,
+                    failureStage, parsedEvent, failure);
+        } catch (Exception auditException) {
+            log.error("record payment event ingest failure failed, storageId={}",
+                    storageRef.storageId(), auditException);
+        }
     }
 
     private void publishPaymentEvent(PaymentEventDO eventDO) {

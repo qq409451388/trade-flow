@@ -9,7 +9,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 /** Ingress 事件投递调度配置。 */
 @Configuration(proxyBeanMethods = false)
 @EnableScheduling
-@EnableConfigurationProperties(EventDeliveryProperties.class)
+@EnableConfigurationProperties({EventDeliveryProperties.class, EventDeliveryCircuitProperties.class})
 public class EventDeliveryConfiguration {
 
     @Bean(name = "taskScheduler")

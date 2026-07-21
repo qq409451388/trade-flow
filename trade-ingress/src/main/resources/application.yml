@@ -47,6 +47,20 @@ trade:
       max-batches: 20
       max-auto-redeliveries: 2
       scan-lock-lease: 14m # 多个 Ingress 实例会同时触发定时任务，但只有取得 Redis 锁的实例执行扫描。设置为14分钟是因为扫描间隔为15分钟
+      circuit:
+        enabled: true
+        failure-window: 1m
+        failure-threshold: 10
+        health-check-delay: 30s
+        scheduler-delay-ms: 30000
+        health-success-threshold: 2
+        half-open-permits: 10
+        recovery-lease: 2m
+        state-cache-ttl: 5s
+        recovery-batch-size: 100
+        pipeline-readiness-url: ${PIPELINE_READINESS_URL:http://127.0.0.1:8083/trade-pipeline/readiness/event-consumer}
+        readiness-connect-timeout: 3s
+        readiness-read-timeout: 5s
   storage:
     local:
       enabled: true

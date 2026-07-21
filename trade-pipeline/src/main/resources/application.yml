@@ -9,6 +9,10 @@ spring:
     default-property-inclusion: non_null
     date-format: yyyy-MM-dd HH:mm:ss
     time-zone: GMT+8
+  task:
+    scheduling:
+      pool:
+        size: 2
 
 mybatis-plus:
   mapper-locations: classpath*:/mapper/**/*.xml
@@ -22,7 +26,38 @@ mybatis-plus:
       logic-delete-value: 1
       logic-not-delete-value: 0
 
+global-id:
+  enabled: true
+  snowflake:
+    datacenter-id: ${PIPELINE_ID_DATACENTER_ID:1}
+    worker-id: ${PIPELINE_ID_WORKER_ID:2}
+    max-clock-backward-ms: 5
+
 trade:
+  pipeline:
+    sharding:
+      # 这里只登记已经创建物理表的年份；新增年份时必须先执行建表 SQL，再追加配置。
+      years:
+        - 2026
+        - 2027
+      order-item-shard-count: 16
+      sql-show: false
+    order-event-consumer:
+      enabled: true
+      stream-key: stream:order-event
+      group: trade-pipeline-order
+      consumer-name: ${PIPELINE_ORDER_CONSUMER_NAME:pipeline-order-1}
+      batch-size: 100
+      poll-delay: 1000
+      block-timeout: 2s
+      reclaim-delay: 30000
+      pending-min-idle: 1m
+      ingress-ack-url: ${INGRESS_ACK_URL:http://127.0.0.1:8115/trade-ingress/event/ack}
+      ingress-ack-connect-timeout: 3s
+      ingress-ack-read-timeout: 5s
+      ingress-exhausted-url: ${INGRESS_EXHAUSTED_URL:http://127.0.0.1:8115/trade-ingress/event/redelivery-exhausted}
+    fuiou-order:
+      zone-id: Asia/Shanghai
   storage:
     local:
       enabled: true

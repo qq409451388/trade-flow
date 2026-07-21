@@ -25,6 +25,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Objects;
+import java.util.HexFormat;
 import java.util.concurrent.TimeUnit;
 
 /** Ingress 事件立即投递、短期重试和超时补发服务。 */
@@ -39,13 +40,16 @@ public class EventDeliveryService {
     private final TaskScheduler taskScheduler;
     private final RedisLock redisLock;
     private final EventDeliveryProperties properties;
+    private final EventDeliveryCircuitBreaker circuitBreaker;
 
     public void deliverOrderEvent(OrderEventDO event) {
         if (event == null || event.getId() == null) {
             return;
         }
         publishOrderSafely(event, "initial");
-        scheduleOrderRetries(event.getId());
+        if (circuitBreaker.allowNormalPublish(ContentType.ORDER.getCode())) {
+            scheduleOrderRetries(event.getId());
+        }
     }
 
     public void deliverPaymentEvent(PaymentEventDO event) {
@@ -53,26 +57,36 @@ public class EventDeliveryService {
             return;
         }
         publishPaymentSafely(event, "initial");
-        schedulePaymentRetries(event.getId());
+        if (circuitBreaker.allowNormalPublish(ContentType.PAYMENT.getCode())) {
+            schedulePaymentRetries(event.getId());
+        }
     }
 
     /** 查询自动补发已耗尽、等待人工处理的事件。 */
-    public List<EventDeliveryVO> listExhausted(Integer contentType, int limit) {
+    public List<EventDeliveryVO> listExhausted(Integer contentType, int limit, List<Long> eventIds) {
         validateContentType(contentType);
         int queryLimit = Math.max(1, Math.min(limit, 500));
         if (contentType == ContentType.ORDER.getCode()) {
-            return orderEventDbService.list(new LambdaQueryWrapper<OrderEventDO>()
-                            .eq(OrderEventDO::getAcked, EventAckStatus.INIT.getCode())
-                            .ge(OrderEventDO::getAutoRedeliveryCount, maxAutoRedeliveries())
-                            .orderByAsc(OrderEventDO::getCreateTime, OrderEventDO::getId)
-                            .last("LIMIT " + queryLimit))
+            LambdaQueryWrapper<OrderEventDO> wrapper = new LambdaQueryWrapper<OrderEventDO>()
+                    .eq(OrderEventDO::getAcked, EventAckStatus.INIT.getCode())
+                    .ge(OrderEventDO::getAutoRedeliveryCount, maxAutoRedeliveries())
+                    .orderByAsc(OrderEventDO::getCreateTime, OrderEventDO::getId)
+                    .last("LIMIT " + queryLimit);
+            if (eventIds != null && !eventIds.isEmpty()) {
+                wrapper.in(OrderEventDO::getId, eventIds);
+            }
+            return orderEventDbService.list(wrapper)
                     .stream().map(this::toDeliveryVO).toList();
         }
-        return paymentEventDbService.list(new LambdaQueryWrapper<PaymentEventDO>()
-                        .eq(PaymentEventDO::getAcked, EventAckStatus.INIT.getCode())
-                        .ge(PaymentEventDO::getAutoRedeliveryCount, maxAutoRedeliveries())
-                        .orderByAsc(PaymentEventDO::getCreateTime, PaymentEventDO::getId)
-                        .last("LIMIT " + queryLimit))
+        LambdaQueryWrapper<PaymentEventDO> wrapper = new LambdaQueryWrapper<PaymentEventDO>()
+                .eq(PaymentEventDO::getAcked, EventAckStatus.INIT.getCode())
+                .ge(PaymentEventDO::getAutoRedeliveryCount, maxAutoRedeliveries())
+                .orderByAsc(PaymentEventDO::getCreateTime, PaymentEventDO::getId)
+                .last("LIMIT " + queryLimit);
+        if (eventIds != null && !eventIds.isEmpty()) {
+            wrapper.in(PaymentEventDO::getId, eventIds);
+        }
+        return paymentEventDbService.list(wrapper)
                 .stream().map(this::toDeliveryVO).toList();
     }
 
@@ -81,11 +95,21 @@ public class EventDeliveryService {
         validateCommand(contentType, eventId);
         if (contentType == ContentType.ORDER.getCode()) {
             OrderEventDO event = requireUnackedOrder(eventId);
-            eventStreamPublisher.publishOrderEvent(event);
+            try {
+                eventStreamPublisher.publishOrderEvent(event);
+            } catch (RuntimeException e) {
+                circuitBreaker.recordPublishFailure(contentType, e);
+                throw e;
+            }
             return;
         }
         PaymentEventDO event = requireUnackedPayment(eventId);
-        eventStreamPublisher.publishPaymentEvent(event);
+        try {
+            eventStreamPublisher.publishPaymentEvent(event);
+        } catch (RuntimeException e) {
+            circuitBreaker.recordPublishFailure(contentType, e);
+            throw e;
+        }
     }
 
     /** 恢复自动补发资格，等待下一轮扫描。 */
@@ -118,9 +142,22 @@ public class EventDeliveryService {
 
     @Scheduled(cron = "${trade.ingress.event-delivery.scan-cron:0 */15 * * * *}")
     public void redeliverStaleUnackedEvents() {
+        if (!circuitBreaker.allowNormalPublish(ContentType.ORDER.getCode())
+                && !circuitBreaker.allowNormalPublish(ContentType.PAYMENT.getCode())) {
+            return;
+        }
         int leaseMillis = durationMillisAsInt(properties.getScanLockLease());
-        if (!redisLock.acquireInstantLock(
-                RedisKeyConstants.EVENT_REDELIVERY_JOB_LOCK, leaseMillis, TimeUnit.MILLISECONDS)) {
+        boolean locked;
+        try {
+            locked = redisLock.acquireInstantLock(
+                    RedisKeyConstants.EVENT_REDELIVERY_JOB_LOCK, leaseMillis, TimeUnit.MILLISECONDS);
+        } catch (RuntimeException e) {
+            circuitBreaker.recordPublishFailure(ContentType.ORDER.getCode(), e);
+            circuitBreaker.recordPublishFailure(ContentType.PAYMENT.getCode(), e);
+            log.warn("event redelivery Redis job lock unavailable", e);
+            return;
+        }
+        if (!locked) {
             return;
         }
         try {
@@ -214,23 +251,114 @@ public class EventDeliveryService {
     }
 
     private boolean publishOrderSafely(OrderEventDO event, String reason) {
+        if (!circuitBreaker.allowNormalPublish(ContentType.ORDER.getCode())) {
+            log.debug("order event publish skipped by open circuit, eventId={}, reason={}", event.getId(), reason);
+            return false;
+        }
         try {
             eventStreamPublisher.publishOrderEvent(event);
             return true;
         } catch (RuntimeException e) {
+            circuitBreaker.recordPublishFailure(ContentType.ORDER.getCode(), e);
             log.warn("order event publish failed, eventId={}, reason={}", event.getId(), reason, e);
             return false;
         }
     }
 
     private boolean publishPaymentSafely(PaymentEventDO event, String reason) {
+        if (!circuitBreaker.allowNormalPublish(ContentType.PAYMENT.getCode())) {
+            log.debug("payment event publish skipped by open circuit, eventId={}, reason={}", event.getId(), reason);
+            return false;
+        }
         try {
             eventStreamPublisher.publishPaymentEvent(event);
             return true;
         } catch (RuntimeException e) {
+            circuitBreaker.recordPublishFailure(ContentType.PAYMENT.getCode(), e);
             log.warn("payment event publish failed, eventId={}, reason={}", event.getId(), reason, e);
             return false;
         }
+    }
+
+    /** HALF_OPEN 专用探测发布；普通请求不能调用此路径。 */
+    public void publishHalfOpenProbe(int contentType, int limit) {
+        if (contentType == ContentType.ORDER.getCode()) {
+            List<OrderEventDO> events = orderEventDbService.list(new LambdaQueryWrapper<OrderEventDO>()
+                    .eq(OrderEventDO::getAcked, EventAckStatus.INIT.getCode())
+                    .orderByAsc(OrderEventDO::getId)
+                    .last("LIMIT " + Math.max(1, limit)));
+            for (OrderEventDO event : events) {
+                eventStreamPublisher.publishOrderEvent(event);
+            }
+            return;
+        }
+        List<PaymentEventDO> events = paymentEventDbService.list(new LambdaQueryWrapper<PaymentEventDO>()
+                .eq(PaymentEventDO::getAcked, EventAckStatus.INIT.getCode())
+                .orderByAsc(PaymentEventDO::getId)
+                .last("LIMIT " + Math.max(1, limit)));
+        for (PaymentEventDO event : events) {
+            eventStreamPublisher.publishPaymentEvent(event);
+        }
+    }
+
+    public long maxUnackedEventId(int contentType) {
+        if (contentType == ContentType.ORDER.getCode()) {
+            OrderEventDO event = orderEventDbService.getOne(new LambdaQueryWrapper<OrderEventDO>()
+                    .eq(OrderEventDO::getAcked, EventAckStatus.INIT.getCode())
+                    .orderByDesc(OrderEventDO::getId)
+                    .last("LIMIT 1"), false);
+            return event == null ? 0L : event.getId();
+        }
+        PaymentEventDO event = paymentEventDbService.getOne(new LambdaQueryWrapper<PaymentEventDO>()
+                .eq(PaymentEventDO::getAcked, EventAckStatus.INIT.getCode())
+                .orderByDesc(PaymentEventDO::getId)
+                .last("LIMIT 1"), false);
+        return event == null ? 0L : event.getId();
+    }
+
+    /** 熔断关闭后按游标恢复积压；每条按一次新的首次投递处理并重新安排短期重试。 */
+    public RecoveryBatchResult recoverBacklog(int contentType, long cursorId, long cutoffId, int limit) {
+        long cursor = cursorId;
+        int normalizedLimit = Math.max(1, limit);
+        if (contentType == ContentType.ORDER.getCode()) {
+            List<OrderEventDO> events = orderEventDbService.list(new LambdaQueryWrapper<OrderEventDO>()
+                    .eq(OrderEventDO::getAcked, EventAckStatus.INIT.getCode())
+                    .gt(OrderEventDO::getId, cursorId)
+                    .le(OrderEventDO::getId, cutoffId)
+                    .orderByAsc(OrderEventDO::getId)
+                    .last("LIMIT " + normalizedLimit));
+            for (OrderEventDO event : events) {
+                if (!circuitBreaker.allowNormalPublish(contentType)) {
+                    return new RecoveryBatchResult(cursor, false);
+                }
+                deliverOrderEvent(event);
+                if (!circuitBreaker.allowNormalPublish(contentType)) {
+                    return new RecoveryBatchResult(cursor, false);
+                }
+                cursor = event.getId();
+            }
+            return new RecoveryBatchResult(cursor, events.size() < normalizedLimit || cursor >= cutoffId);
+        }
+        List<PaymentEventDO> events = paymentEventDbService.list(new LambdaQueryWrapper<PaymentEventDO>()
+                .eq(PaymentEventDO::getAcked, EventAckStatus.INIT.getCode())
+                .gt(PaymentEventDO::getId, cursorId)
+                .le(PaymentEventDO::getId, cutoffId)
+                .orderByAsc(PaymentEventDO::getId)
+                .last("LIMIT " + normalizedLimit));
+        for (PaymentEventDO event : events) {
+            if (!circuitBreaker.allowNormalPublish(contentType)) {
+                return new RecoveryBatchResult(cursor, false);
+            }
+            deliverPaymentEvent(event);
+            if (!circuitBreaker.allowNormalPublish(contentType)) {
+                return new RecoveryBatchResult(cursor, false);
+            }
+            cursor = event.getId();
+        }
+        return new RecoveryBatchResult(cursor, events.size() < normalizedLimit || cursor >= cutoffId);
+    }
+
+    public record RecoveryBatchResult(long cursorId, boolean finished) {
     }
 
     private void recordOrderAutoRedelivery(OrderEventDO event) {
@@ -286,12 +414,14 @@ public class EventDeliveryService {
     private EventDeliveryVO toDeliveryVO(OrderEventDO event) {
         return new EventDeliveryVO(ContentType.ORDER.getCode(), event.getId(), event.getSourceSystem(),
                 event.getThirdEventKey(), event.getMessageVersion(), event.getRawId(),
+                HexFormat.of().formatHex(event.getPayloadSha256()),
                 event.getAutoRedeliveryCount(), event.getLastRedeliveryTime(), event.getCreateTime());
     }
 
     private EventDeliveryVO toDeliveryVO(PaymentEventDO event) {
         return new EventDeliveryVO(ContentType.PAYMENT.getCode(), event.getId(), event.getSourceSystem(),
                 event.getThirdEventKey(), event.getMessageVersion(), event.getRawId(),
+                HexFormat.of().formatHex(event.getPayloadSha256()),
                 event.getAutoRedeliveryCount(), event.getLastRedeliveryTime(), event.getCreateTime());
     }
 
