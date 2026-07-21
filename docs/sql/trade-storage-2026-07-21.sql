@@ -37,6 +37,13 @@ BEGIN
                 SET MESSAGE_TEXT = 'Storage BLOB 分片存在数据，禁止执行空表重建脚本';
         END IF;
 
+        SET shard_no = shard_no + 1;
+    END WHILE;
+
+    -- 全部100组都验证为空后才开始删除，避免中途 SIGNAL 造成部分分表已被删除。
+    SET shard_no = 0;
+    WHILE shard_no < 100 DO
+        SET shard_suffix = LPAD(shard_no, 2, '0');
         SET @drop_sql = CONCAT(
             'DROP TABLE `trade_storage_', shard_suffix, '`, ',
             '`trade_storage_blob_', shard_suffix, '`'
@@ -44,7 +51,6 @@ BEGIN
         PREPARE drop_stmt FROM @drop_sql;
         EXECUTE drop_stmt;
         DEALLOCATE PREPARE drop_stmt;
-
         SET shard_no = shard_no + 1;
     END WHILE;
 END$$

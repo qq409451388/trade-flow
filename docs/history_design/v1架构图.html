@@ -1,0 +1,149 @@
+<head>
+  <title>富友 SAAS 平台同步架构图 V1</title>
+  <meta charset="UTF-8">
+  <style>
+    :root{
+      --surface:#ffffff;--surface-muted:#f5f5f7;--border:#e5e5ea;
+      --text:#1d1d1f;--text-muted:#86868b;
+      --brand:#6d5efc;--brand-soft:#efedff;
+      --font-sans:-apple-system,"SF Pro Text","PingFang SC","Microsoft YaHei",sans-serif;
+      --radius-card:12px;
+    }
+    :root[data-widget-theme="dark"]{
+      --surface:#1c1c1e;--surface-muted:#2c2c2e;--border:#3a3a3c;
+      --text:#f5f5f7;--text-muted:#98989d;
+      --brand:#8b7dff;--brand-soft:#2a2547;
+    }
+    .widget-root{font-family:var(--font-sans);}
+    .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-card);padding:20px;}
+    .card-head{margin-bottom:14px;}
+    .card-title{font-size:16px;font-weight:600;color:var(--text);}
+    .card-sub{font-size:12px;color:var(--text-muted);margin-top:4px;}
+    .card-foot{font-size:12px;color:var(--text-muted);margin-top:14px;padding-top:12px;border-top:1px solid var(--border);display:flex;gap:24px;flex-wrap:wrap;}
+    .lg{display:inline-flex;align-items:center;gap:6px;}
+    .lg span{width:22px;height:0;border-top:1.5px solid var(--text-muted);display:inline-block;}
+    .lg.dashed span{border-top:1.5px dashed var(--text-muted);}
+    svg{width:100%;height:auto;display:block;overflow:visible;}
+    .node{fill:var(--surface);stroke:var(--border);stroke-width:1;}
+    .node-focal{fill:var(--brand-soft);stroke:var(--brand);stroke-width:1.5;}
+    .node-ext{fill:var(--surface);stroke:var(--border);stroke-width:1;stroke-dasharray:5 3;}
+    .cbg{fill:var(--surface-muted);stroke:var(--border);stroke-width:1;}
+    .cyl{fill:var(--surface-muted);stroke:var(--border);stroke-width:1;}
+    .conn{fill:none;stroke:var(--text-muted);stroke-width:1.5;}
+    .conn-d{stroke-dasharray:5 3;}
+    .cap{fill:var(--surface);stroke:var(--border);stroke-width:1;}
+    .t-title{font-size:15px;font-weight:600;fill:var(--text);}
+    .t-sub{font-size:12px;fill:var(--text-muted);}
+    .t-cap{font-size:11px;fill:var(--text);}
+    .t-ctitle{font-size:11px;font-weight:600;fill:var(--text-muted);letter-spacing:0.6px;}
+    .t-label{font-size:11px;fill:var(--text-muted);}
+    #arr path{fill:var(--text-muted);}
+  </style>
+</head>
+<body>
+<div class="widget-root" data-dynamic-ui-widget data-template="node-flow">
+  <div class="card">
+    <div class="card-head">
+      <div class="card-title">富友推送消息处理架构</div>
+      <div class="card-sub">同步快收 &lt; 50ms · Redis Stream 异步落库 · 幂等双保险 · PEL 回收容错</div>
+    </div>
+    <svg viewBox="0 0 720 772" role="img" aria-label="富友推送消息处理架构图">
+      <defs>
+        <marker id="arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+          <path d="M1 1 L7 4 L1 7 Z"/>
+        </marker>
+      </defs>
+
+      <!-- 富友 SAAS 平台 (外部) -->
+      <rect class="node-ext" x="200" y="40" width="200" height="44" rx="22"/>
+      <text class="t-title" x="300" y="67" text-anchor="middle">富友 SAAS 平台</text>
+
+      <!-- 反馈：返回fail · 富友重试 (左侧回路) -->
+      <path class="conn conn-d" d="M200,62 L72,62 L72,172 L150,172" marker-end="url(#arr)"/>
+      <text class="t-label" x="64" y="120" text-anchor="middle" transform="rotate(-90 64 120)">返回fail · 富友重试</text>
+
+      <!-- 连接线1: 富友 -> Controller -->
+      <path class="conn" d="M300,84 L300,108" marker-end="url(#arr)"/>
+
+      <!-- 容器1: 同步接收层 -->
+      <rect class="cbg" x="110" y="108" width="380" height="104" rx="12"/>
+      <text class="t-ctitle" x="128" y="128">同步接收层 · 目标 &lt; 50ms</text>
+      <rect class="node" x="150" y="144" width="300" height="56" rx="8"/>
+      <text class="t-title" x="300" y="166" text-anchor="middle">OrderPushController</text>
+      <text class="t-sub" x="300" y="186" text-anchor="middle">验签 MD5 → XADD 入队</text>
+
+      <!-- 连接线2: Controller -> Redis Stream -->
+      <path class="conn" d="M300,212 L300,248" marker-end="url(#arr)"/>
+      <rect class="cap" x="276" y="222" width="48" height="18" rx="9"/>
+      <text class="t-cap" x="300" y="235" text-anchor="middle">XADD</text>
+
+      <!-- Redis Stream (焦点) -->
+      <rect class="node-focal" x="150" y="250" width="300" height="64" rx="8"/>
+      <text class="t-title" x="300" y="276" text-anchor="middle">Redis Stream</text>
+      <text class="t-sub" x="300" y="297" text-anchor="middle">fuiou:order:push · 异步解耦</text>
+
+      <!-- 连接线3: Redis -> Consumer -->
+      <path class="conn" d="M300,314 L300,388" marker-end="url(#arr)"/>
+      <rect class="cap" x="238" y="334" width="124" height="18" rx="9"/>
+      <text class="t-cap" x="300" y="347" text-anchor="middle">XREADGROUP · 5s</text>
+
+      <!-- 容器2: 异步消费层 -->
+      <rect class="cbg" x="110" y="350" width="380" height="220" rx="12"/>
+      <text class="t-ctitle" x="128" y="370">异步消费层</text>
+
+      <!-- Consumer -->
+      <rect class="node" x="150" y="388" width="300" height="56" rx="8"/>
+      <text class="t-title" x="300" y="410" text-anchor="middle">OrderPushConsumer</text>
+      <text class="t-sub" x="300" y="430" text-anchor="middle">定时 5s 消费 + PEL 回收 60s</text>
+
+      <!-- 内部连接 -->
+      <path class="conn" d="M300,444 L300,468" marker-end="url(#arr)"/>
+
+      <!-- Persist -->
+      <rect class="node" x="150" y="470" width="300" height="70" rx="8"/>
+      <text class="t-title" x="300" y="492" text-anchor="middle">BatchPersist → Persist</text>
+      <text class="t-sub" x="300" y="512" text-anchor="middle">幂等检查 + 单条事务 UPSERT</text>
+      <text class="t-sub" x="300" y="530" text-anchor="middle">子表删除重插 · 推送日志</text>
+
+      <!-- 连接线4: Persist -> MySQL -->
+      <path class="conn" d="M300,540 L300,598" marker-end="url(#arr)"/>
+
+      <!-- 失败审计日志 (右侧) -->
+      <rect class="node" x="530" y="404" width="150" height="120" rx="8"/>
+      <text class="t-title" x="605" y="428" text-anchor="middle">失败审计日志</text>
+      <text class="t-sub" x="605" y="448" text-anchor="middle">OrderFailLogService</text>
+      <text class="t-sub" x="605" y="466" text-anchor="middle">REQUIRES_NEW</text>
+      <text class="t-sub" x="605" y="484" text-anchor="middle">独立事务保留</text>
+      <!-- 虚线: Consumer -> 审计 -->
+      <path class="conn conn-d" d="M450,416 C490,416 500,440 530,440" marker-end="url(#arr)"/>
+      <!-- 虚线: Persist -> 审计 -->
+      <path class="conn conn-d" d="M450,505 C490,505 500,475 530,475" marker-end="url(#arr)"/>
+
+      <!-- MySQL 圆柱 -->
+      <ellipse class="cyl" cx="300" cy="662" rx="150" ry="10"/>
+      <rect x="150" y="610" width="300" height="52" fill="var(--surface-muted)" stroke="none"/>
+      <line x1="150" y1="610" x2="150" y2="662" stroke="var(--border)" stroke-width="1"/>
+      <line x1="450" y1="610" x2="450" y2="662" stroke="var(--border)" stroke-width="1"/>
+      <ellipse class="cyl" cx="300" cy="610" rx="150" ry="10"/>
+      <text class="t-title" x="300" y="638" text-anchor="middle">MySQL · fuioupay-cloud</text>
+      <text class="t-sub" x="300" y="657" text-anchor="middle">oms_order / 子表 / 推送日志</text>
+
+      <!-- 底部说明 -->
+      <text class="t-sub" x="40" y="708">支付推送 (payment-receiver) 架构对称，仅 Stream Key / 表名 / 字段不同</text>
+      <g transform="translate(40,738)">
+        <line x1="0" y1="0" x2="24" y2="0" stroke="var(--text-muted)" stroke-width="1.5"/>
+        <text class="t-label" x="30" y="4">主流程</text>
+        <line x1="110" y1="0" x2="134" y2="0" stroke="var(--text-muted)" stroke-width="1.5" stroke-dasharray="5 3"/>
+        <text class="t-label" x="140" y="4">异常 / 审计</text>
+        <rect x="220" y="-6" width="16" height="12" rx="3" fill="var(--brand-soft)" stroke="var(--brand)" stroke-width="1"/>
+        <text class="t-label" x="242" y="4">焦点：异步解耦</text>
+      </g>
+    </svg>
+    <div class="card-foot">
+      <span class="lg"><span></span>主流程</span>
+      <span class="lg dashed"><span></span>异常 / 审计</span>
+      <span class="lg"><span style="border-top-color:var(--brand);"></span>焦点链路</span>
+    </div>
+  </div>
+</div>
+</body>

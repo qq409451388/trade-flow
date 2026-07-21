@@ -2,6 +2,7 @@ package com.mtx.trade.receiver.service;
 
 import com.mtx.trade.common.enums.ContentType;
 import com.mtx.trade.receiver.entity.OrderEventDO;
+import com.mtx.trade.receiver.entity.PaymentEventDO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -43,6 +44,22 @@ public class EventStreamPublisher {
         fields.put("storageId", String.valueOf(eventDO.getRawId()));
         fields.put("storageSha256", HexFormat.of().formatHex(eventDO.getPayloadSha256()));
         fields.put("eventKey", eventDO.getThirdEventKey());
+        fields.put("sourceSystem", String.valueOf(eventDO.getSourceSystem()));
+        fields.put("contentType", String.valueOf(ContentType.ORDER.getCode()));
+        fields.put("messageVersion", String.valueOf(eventDO.getMessageVersion()));
+        fields.put("eventStatus", String.valueOf(eventDO.getEventStatus()));
+
+        stringRedisTemplate.opsForStream().add(orderEventStreamKey, fields);
+        log.info("order event published, stream={}, eventId={}, storageId={}",
+                orderEventStreamKey, eventDO.getId(), eventDO.getRawId());
+    }
+
+    public void publishPaymentEvent(PaymentEventDO eventDO) {
+        Map<String, String> fields = new LinkedHashMap<>();
+        fields.put("eventId", String.valueOf(eventDO.getId()));
+        fields.put("storageId", String.valueOf(eventDO.getRawId()));
+        fields.put("storageSha256", HexFormat.of().formatHex(eventDO.getPayloadSha256()));
+        fields.put("eventKey", eventDO.getEventKey());
         fields.put("sourceSystem", String.valueOf(eventDO.getSourceSystem()));
         fields.put("contentType", String.valueOf(ContentType.ORDER.getCode()));
         fields.put("messageVersion", String.valueOf(eventDO.getMessageVersion()));
