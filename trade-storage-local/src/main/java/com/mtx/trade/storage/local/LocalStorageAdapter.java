@@ -6,11 +6,13 @@ import com.mtx.trade.storage.api.StorageRef;
 import com.mtx.trade.storage.api.StorageWriteCommand;
 import com.mtx.trade.storage.api.StorageWriteException;
 import com.mtx.trade.storage.api.StorageWriter;
+import com.mtx.trade.storage.local.config.StorageShardingHint;
 import com.mtx.trade.storage.local.entity.StorageBlobDO;
 import com.mtx.trade.storage.local.entity.StorageDO;
 import com.mtx.trade.storage.local.service.db.StorageBlobDbService;
 import com.mtx.trade.storage.local.service.db.StorageDbService;
 import lombok.RequiredArgsConstructor;
+import org.apache.shardingsphere.infra.hint.HintManager;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -30,28 +32,21 @@ public class LocalStorageAdapter implements StorageWriter {
 
     @Override
     @Transactional(transactionManager = "storageTransactionManager", rollbackFor = Exception.class)
-    public StorageRef put(StorageWriteCommand command) {
-        if (command == null) {
-            throw new IllegalArgumentException("storage 写入命令不能为空");
-        }
-        return doInsert(command, sha256(command.content()), false);
-    }
-
-    @Override
-    @Transactional(transactionManager = "storageTransactionManager", rollbackFor = Exception.class)
     public StorageRef putIfAbsent(StorageWriteCommand command) {
         if (command == null) {
             throw new IllegalArgumentException("storage 写入命令不能为空");
         }
         byte[] sha256 = sha256(command.content());
-        StorageDO existing = findExisting(command.sourceSystem(), sha256, false);
-        if (existing != null) {
-            return toRef(existing);
+        try (HintManager ignored = StorageShardingHint.open(sha256)) {
+            StorageDO existing = findExisting(command.sourceSystem(), sha256, false);
+            if (existing != null) {
+                return toRef(existing);
+            }
+            return doInsert(command, sha256);
         }
-        return doInsert(command, sha256, true);
     }
 
-    private StorageRef doInsert(StorageWriteCommand command, byte[] sha256, boolean duplicateAsExisting) {
+    private StorageRef doInsert(StorageWriteCommand command, byte[] sha256) {
         byte[] content = command.content();
         long storageId = storageIdGenerator.nextId();
         if (storageId <= 0) {
@@ -73,11 +68,9 @@ public class LocalStorageAdapter implements StorageWriter {
                 throw new StorageWriteException("storage 元数据写入失败");
             }
         } catch (DuplicateKeyException e) {
-            if (duplicateAsExisting) {
-                StorageDO existing = findExisting(command.sourceSystem(), sha256, true);
-                if (existing != null) {
-                    return toRef(existing);
-                }
+            StorageDO existing = findExisting(command.sourceSystem(), sha256, true);
+            if (existing != null) {
+                return toRef(existing);
             }
             throw new StorageWriteException("storage 元数据主键或内容幂等键冲突", e);
         }

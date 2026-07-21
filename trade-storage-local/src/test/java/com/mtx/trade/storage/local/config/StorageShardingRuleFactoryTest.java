@@ -1,12 +1,11 @@
 package com.mtx.trade.storage.local.config;
 
-import org.apache.shardingsphere.infra.datanode.DataNodeInfo;
 import org.apache.shardingsphere.infra.spi.type.typed.TypedSPILoader;
 import org.apache.shardingsphere.sharding.api.config.ShardingRuleConfiguration;
 import org.apache.shardingsphere.sharding.api.config.rule.ShardingTableRuleConfiguration;
-import org.apache.shardingsphere.sharding.api.config.strategy.sharding.StandardShardingStrategyConfiguration;
-import org.apache.shardingsphere.sharding.api.sharding.standard.PreciseShardingValue;
-import org.apache.shardingsphere.sharding.api.sharding.standard.StandardShardingAlgorithm;
+import org.apache.shardingsphere.sharding.api.config.strategy.sharding.HintShardingStrategyConfiguration;
+import org.apache.shardingsphere.sharding.api.sharding.hint.HintShardingAlgorithm;
+import org.apache.shardingsphere.sharding.api.sharding.hint.HintShardingValue;
 import org.apache.shardingsphere.sharding.spi.ShardingAlgorithm;
 import org.junit.jupiter.api.Test;
 
@@ -40,9 +39,8 @@ class StorageShardingRuleFactoryTest {
         assertThat(rule.getBindingTableGroups()).singleElement().satisfies(binding ->
                 assertThat(binding.getReference()).isEqualTo("trade_storage,trade_storage_blob"));
         assertThat(tables.values()).allSatisfy(table -> {
-            StandardShardingStrategyConfiguration strategy =
-                    (StandardShardingStrategyConfiguration) table.getTableShardingStrategy();
-            assertThat(strategy.getShardingColumn()).isEqualTo("payload_sha256");
+            HintShardingStrategyConfiguration strategy =
+                    (HintShardingStrategyConfiguration) table.getTableShardingStrategy();
             assertThat(strategy.getShardingAlgorithmName()).isEqualTo("storage_sha256");
         });
     }
@@ -60,21 +58,21 @@ class StorageShardingRuleFactoryTest {
 
     @Test
     @SuppressWarnings({"rawtypes", "unchecked"})
-    void shouldRouteBinaryShaToTwoDigitPhysicalTable() {
+    void shouldRouteShaBucketHintToTwoDigitPhysicalTable() {
         byte[] sha256 = new byte[32];
         sha256[31] = 99;
         ShardingRuleConfiguration rule = StorageShardingRuleFactory.create();
-        StandardShardingAlgorithm algorithm = (StandardShardingAlgorithm) TypedSPILoader.getService(
+        HintShardingAlgorithm algorithm = (HintShardingAlgorithm) TypedSPILoader.getService(
                 ShardingAlgorithm.class,
                 "CLASS_BASED",
                 rule.getShardingAlgorithms().get("storage_sha256").getProps());
-        PreciseShardingValue shardingValue = new PreciseShardingValue(
-                "trade_storage", "payload_sha256", new DataNodeInfo("", 2, '0'), sha256);
+        HintShardingValue shardingValue = new HintShardingValue(
+                "trade_storage", "", List.of(Sha256ShardingAlgorithm.shardIndex(sha256)));
 
-        String target = algorithm.doSharding(
+        java.util.Collection<String> targets = algorithm.doSharding(
                 List.of("trade_storage_00", "trade_storage_01", "trade_storage_99"), shardingValue);
 
-        assertThat(target).isEqualTo("trade_storage_99");
+        assertThat(targets).containsExactly("trade_storage_99");
     }
 
     @Test

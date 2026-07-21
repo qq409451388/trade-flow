@@ -5,8 +5,6 @@ package com.mtx.trade.storage.api;
  */
 public interface StorageWriter {
 
-    StorageRef put(StorageWriteCommand command);
-
     /**
      * 如果相同 {@code (sourceSystem, sha256)} 的内容已存在，直接返回已有 StorageRef；
      * 否则写入新内容并返回。

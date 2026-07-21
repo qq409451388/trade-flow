@@ -46,7 +46,9 @@ trade-common：DTO、异常、枚举、ID 等轻量公共能力
 - 虚拟分片编号固定为 `unsigned(payload_sha256) % 100`，使用完整256位无符号整数取模，物理表后缀为 `_00` 到 `_99`。
 - SHA-256 在统计上均匀分布；无状态路由不承诺各表记录数绝对相等，但长期会趋近平均。
 - 两张逻辑表为 binding tables，相同 SHA-256 必须路由到相同后缀。禁止对 `byte[]` 使用 Java 对象 `hashCode()` 或 ShardingSphere 内置 `HASH_MOD`。
-- `LocalStorageAdapter.put` 在 `storageTransactionManager` 事务中同时写元数据和 BLOB。
+- ShardingSphere 5.5.2 的标准分片策略会在调用自定义算法前强制分片值实现 `Comparable`，因此无法直接使用 JDBC `byte[]`。本地 adapter 保持数据库 `BINARY(32)` 和 Java `byte[]` 不变，在每次读写前根据完整 SHA-256 计算整数桶号，并通过 `HintManager` 路由；禁止为了绕过该限制把字段扩大为 `CHAR(64)`。
+- Hint 是 Storage adapter 的持久化实现细节。所有 Storage SQL 必须经 `StorageWriter` / `StorageReader` 执行，禁止业务代码绕过 adapter 直接调用 Mapper，否则缺少 Hint 时无法确定唯一物理表。
+- `LocalStorageAdapter.putIfAbsent` 在 `storageTransactionManager` 事务中完成幂等检查并同时写元数据和 BLOB。
 - metadata 或 BLOB 任一 `save` 返回 `false` 时主动抛出 `StorageWriteException`，整个事务回滚；receiver 将异常转换为富友失败响应。
 - `putIfAbsent` 先按 `(source_system, payload_sha256)` 精确查询单个分片；并发竞争最终由分片内同字段唯一键兜底，命中后返回已有 `(id, SHA-256)`。
 - 虚拟分片数量 100 是稳定契约。未来拆 MySQL 实例时只重新分配 00~99 逻辑桶，禁止改为 `SHA % 数据库实例数`。
@@ -86,7 +88,6 @@ Storage 固定注册以下命名 bean：
 写入：
 
 ```java
-StorageRef put(StorageWriteCommand command);
 StorageRef putIfAbsent(StorageWriteCommand command);
 ```
 

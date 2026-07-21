@@ -93,7 +93,7 @@ receiver/pipeline 只依赖稳定接口，不直接调用 Storage Mapper/DB Serv
 
 ```java
 public interface StorageWriter {
-    StorageRef put(StorageWriteCommand command);
+    StorageRef putIfAbsent(StorageWriteCommand command);
 }
 
 public interface StorageReader {

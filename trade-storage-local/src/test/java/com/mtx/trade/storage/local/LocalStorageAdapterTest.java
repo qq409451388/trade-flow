@@ -34,7 +34,7 @@ class LocalStorageAdapterTest {
         when(storageDbService.save(any())).thenReturn(true);
         when(storageBlobDbService.save(any())).thenReturn(true);
 
-        StorageRef result = adapter.put(new StorageWriteCommand(1, 1, new byte[]{1, 2, 3}, null));
+        StorageRef result = adapter.putIfAbsent(new StorageWriteCommand(1, 1, new byte[]{1, 2, 3}, null));
 
         ArgumentCaptor<StorageDO> storageCaptor = ArgumentCaptor.forClass(StorageDO.class);
         ArgumentCaptor<StorageBlobDO> blobCaptor = ArgumentCaptor.forClass(StorageBlobDO.class);
@@ -51,7 +51,7 @@ class LocalStorageAdapterTest {
     void shouldFailBeforeBlobWriteWhenMetadataSaveReturnsFalse() {
         when(storageDbService.save(any())).thenReturn(false);
 
-        assertThatThrownBy(() -> adapter.put(new StorageWriteCommand(1, 1, new byte[]{1}, null)))
+        assertThatThrownBy(() -> adapter.putIfAbsent(new StorageWriteCommand(1, 1, new byte[]{1}, null)))
                 .isInstanceOf(StorageWriteException.class)
                 .hasMessageContaining("元数据");
         verify(storageBlobDbService, never()).save(any());
@@ -62,7 +62,7 @@ class LocalStorageAdapterTest {
         when(storageDbService.save(any())).thenReturn(true);
         when(storageBlobDbService.save(any())).thenReturn(false);
 
-        assertThatThrownBy(() -> adapter.put(new StorageWriteCommand(1, 1, new byte[]{1}, null)))
+        assertThatThrownBy(() -> adapter.putIfAbsent(new StorageWriteCommand(1, 1, new byte[]{1}, null)))
                 .isInstanceOf(StorageWriteException.class)
                 .hasMessageContaining("BLOB");
     }

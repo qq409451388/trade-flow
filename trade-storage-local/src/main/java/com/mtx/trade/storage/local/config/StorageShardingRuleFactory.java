@@ -4,7 +4,7 @@ import org.apache.shardingsphere.infra.algorithm.core.config.AlgorithmConfigurat
 import org.apache.shardingsphere.sharding.api.config.ShardingRuleConfiguration;
 import org.apache.shardingsphere.sharding.api.config.rule.ShardingTableReferenceRuleConfiguration;
 import org.apache.shardingsphere.sharding.api.config.rule.ShardingTableRuleConfiguration;
-import org.apache.shardingsphere.sharding.api.config.strategy.sharding.StandardShardingStrategyConfiguration;
+import org.apache.shardingsphere.sharding.api.config.strategy.sharding.HintShardingStrategyConfiguration;
 
 import java.util.Properties;
 
@@ -13,7 +13,6 @@ public final class StorageShardingRuleFactory {
 
     public static final int SHARD_COUNT = 100;
     private static final String DATA_SOURCE_NAME = "storage_mysql";
-    private static final String SHARD_COLUMN = "payload_sha256";
     private static final String SHARDING_ALGORITHM = "storage_sha256";
     private static final String[] TABLES = {"trade_storage", "trade_storage_blob"};
 
@@ -26,7 +25,7 @@ public final class StorageShardingRuleFactory {
             rule.getTables().add(tableRule(table));
         }
         Properties algorithmProperties = new Properties();
-        algorithmProperties.setProperty("strategy", "STANDARD");
+        algorithmProperties.setProperty("strategy", "HINT");
         algorithmProperties.setProperty("algorithmClassName", Sha256ShardingAlgorithm.class.getName());
         rule.getShardingAlgorithms().put(
                 SHARDING_ALGORITHM, new AlgorithmConfiguration("CLASS_BASED", algorithmProperties));
@@ -46,7 +45,7 @@ public final class StorageShardingRuleFactory {
         }
         ShardingTableRuleConfiguration tableRule = new ShardingTableRuleConfiguration(table, actualDataNodes.toString());
         tableRule.setTableShardingStrategy(
-                new StandardShardingStrategyConfiguration(SHARD_COLUMN, SHARDING_ALGORITHM));
+                new HintShardingStrategyConfiguration(SHARDING_ALGORITHM));
         return tableRule;
     }
 }
