@@ -3,8 +3,8 @@ package com.mtx.trade.common.id;
 /**
  * 默认领域 ID 生成器实现，委托底层 {@link SnowflakeIdEngine}。
  *
- * <p>领域名称不编码到 ID 中，ID 默认跨领域全局唯一。
- * 所有领域生成器共享同一个 {@code SnowflakeIdEngine} 实例。</p>
+ * <p>领域名称不编码到 ID 中。生成器可以委托全局引擎，也可以委托配置的独立领域引擎；
+ * 跨领域唯一性依赖各独立引擎使用不同的节点组合。</p>
  */
 public class DefaultDomainIdGenerator implements DomainIdGenerator {
 

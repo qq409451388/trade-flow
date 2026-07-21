@@ -13,4 +13,8 @@ public record StorageRef(Long storageId, byte[] sha256, int contentLength) {
     public byte[] sha256() {
         return sha256.clone();
     }
+
+    public StorageKey key() {
+        return new StorageKey(storageId, sha256);
+    }
 }

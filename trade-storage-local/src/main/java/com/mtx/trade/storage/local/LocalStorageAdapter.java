@@ -1,5 +1,6 @@
 package com.mtx.trade.storage.local;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.mtx.trade.storage.api.StorageIdGenerator;
 import com.mtx.trade.storage.api.StorageRef;
 import com.mtx.trade.storage.api.StorageWriteCommand;
@@ -10,6 +11,7 @@ import com.mtx.trade.storage.local.entity.StorageDO;
 import com.mtx.trade.storage.local.service.db.StorageBlobDbService;
 import com.mtx.trade.storage.local.service.db.StorageDbService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.security.MessageDigest;
@@ -32,9 +34,25 @@ public class LocalStorageAdapter implements StorageWriter {
         if (command == null) {
             throw new IllegalArgumentException("storage 写入命令不能为空");
         }
+        return doInsert(command, sha256(command.content()), false);
+    }
 
+    @Override
+    @Transactional(transactionManager = "storageTransactionManager", rollbackFor = Exception.class)
+    public StorageRef putIfAbsent(StorageWriteCommand command) {
+        if (command == null) {
+            throw new IllegalArgumentException("storage 写入命令不能为空");
+        }
+        byte[] sha256 = sha256(command.content());
+        StorageDO existing = findExisting(command.sourceSystem(), sha256, false);
+        if (existing != null) {
+            return toRef(existing);
+        }
+        return doInsert(command, sha256, true);
+    }
+
+    private StorageRef doInsert(StorageWriteCommand command, byte[] sha256, boolean duplicateAsExisting) {
         byte[] content = command.content();
-        byte[] sha256 = sha256(content);
         long storageId = storageIdGenerator.nextId();
         if (storageId <= 0) {
             throw new StorageWriteException("storage 域 ID 生成失败");
@@ -50,17 +68,40 @@ public class LocalStorageAdapter implements StorageWriter {
         storage.setContentOffset(0L);
         storage.setContentLength(content.length);
         storage.setReceivedTime(command.receivedTime() == null ? LocalDateTime.now() : command.receivedTime());
-        if (!storageDbService.save(storage)) {
-            throw new StorageWriteException("storage 元数据写入失败");
+        try {
+            if (!storageDbService.save(storage)) {
+                throw new StorageWriteException("storage 元数据写入失败");
+            }
+        } catch (DuplicateKeyException e) {
+            if (duplicateAsExisting) {
+                StorageDO existing = findExisting(command.sourceSystem(), sha256, true);
+                if (existing != null) {
+                    return toRef(existing);
+                }
+            }
+            throw new StorageWriteException("storage 元数据主键或内容幂等键冲突", e);
         }
 
         StorageBlobDO blob = new StorageBlobDO();
         blob.setId(storageId);
+        blob.setPayloadSha256(sha256);
         blob.setContent(content);
         if (!storageBlobDbService.save(blob)) {
             throw new StorageWriteException("storage BLOB 写入失败");
         }
         return new StorageRef(storageId, sha256, content.length);
+    }
+
+    private StorageDO findExisting(int sourceSystem, byte[] sha256, boolean forUpdate) {
+        LambdaQueryWrapper<StorageDO> query = new LambdaQueryWrapper<StorageDO>()
+                .eq(StorageDO::getPayloadSha256, sha256)
+                .eq(StorageDO::getSourceSystem, sourceSystem)
+                .last(forUpdate ? "LIMIT 1 FOR UPDATE" : "LIMIT 1");
+        return storageDbService.getOne(query, false);
+    }
+
+    private static StorageRef toRef(StorageDO storage) {
+        return new StorageRef(storage.getId(), storage.getPayloadSha256(), storage.getContentLength());
     }
 
     private static byte[] sha256(byte[] content) {

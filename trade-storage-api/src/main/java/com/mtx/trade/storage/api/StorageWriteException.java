@@ -6,4 +6,8 @@ public class StorageWriteException extends RuntimeException {
     public StorageWriteException(String message) {
         super(message);
     }
+
+    public StorageWriteException(String message, Throwable cause) {
+        super(message, cause);
+    }
 }

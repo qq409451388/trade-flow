@@ -19,12 +19,13 @@ public class EventExecutionLogServiceImpl implements EventExecutionLogService {
     private final EventExecutionLogDbService eventExecutionLogDbService;
 
     @Override
-    public EventExecutionLogDO log(int eventType, Long eventId, Long rawId, int triggerType,
+    public EventExecutionLogDO log(int eventType, Long eventId, Long rawId, byte[] payloadSha256, int triggerType,
                                    int executionStatus, String message, String operatorName) {
         EventExecutionLogDO entity = new EventExecutionLogDO();
         entity.setEventType(eventType);
         entity.setEventId(eventId);
         entity.setRawId(rawId);
+        entity.setPayloadSha256(payloadSha256);
         entity.setTriggerType(triggerType);
         entity.setExecutionStatus(executionStatus);
         entity.setMessage(message);

@@ -41,14 +41,17 @@ trade-common：DTO、异常、枚举、ID 等轻量公共能力
 - 逻辑表：`trade_storage`、`trade_storage_blob`。
 - receiver 通过 common 的 `IdGeneratorRegistry.forDomain("storage")` 生成一次 storage 领域雪花 ID。
 - `trade_storage.id = trade_storage_blob.id`：两张表必须复用这一次生成的同一个 ID，禁止分别生成。
+- `trade_storage.payload_sha256 = trade_storage_blob.payload_sha256`：两张表必须携带同一个32字节路由键。
 - 两个 DO 的主键均使用 `IdType.INPUT`，Storage 持久化不走 MyBatis-Plus 全局 ID 自动填充。
-- 虚拟分片编号固定为 `id % 100`，物理表后缀为 `_00` 到 `_99`。
-- 两张逻辑表为 binding tables，同一 id 必须路由到相同后缀。
+- 虚拟分片编号固定为 `unsigned(payload_sha256) % 100`，使用完整256位无符号整数取模，物理表后缀为 `_00` 到 `_99`。
+- SHA-256 在统计上均匀分布；无状态路由不承诺各表记录数绝对相等，但长期会趋近平均。
+- 两张逻辑表为 binding tables，相同 SHA-256 必须路由到相同后缀。禁止对 `byte[]` 使用 Java 对象 `hashCode()` 或 ShardingSphere 内置 `HASH_MOD`。
 - `LocalStorageAdapter.put` 在 `storageTransactionManager` 事务中同时写元数据和 BLOB。
 - metadata 或 BLOB 任一 `save` 返回 `false` 时主动抛出 `StorageWriteException`，整个事务回滚；receiver 将异常转换为富友失败响应。
-- 虚拟分片数量 100 是稳定契约。未来拆 MySQL 实例时只重新分配 00~99 逻辑桶，禁止改为 `id % 实例数`。
+- `putIfAbsent` 先按 `(source_system, payload_sha256)` 精确查询单个分片；并发竞争最终由分片内同字段唯一键兜底，命中后返回已有 `(id, SHA-256)`。
+- 虚拟分片数量 100 是稳定契约。未来拆 MySQL 实例时只重新分配 00~99 逻辑桶，禁止改为 `SHA % 数据库实例数`。
 
-建表脚本当前见 `docs/sql/trade_receiver_storage分表创建.sql`。该脚本依赖预先存在的模板表 `trade_storage` 和 `trade_storage_blob`。
+全新环境建表脚本见 `docs/sql/trade_receiver_storage分表创建.sql`；当前空分片迁移脚本见 `docs/sql/trade-storage-2026-07-21.sql`。后者发现任一物理分表有数据会主动终止，已有数据必须按新 SHA 路由搬迁后再切换规则。
 
 ## 4. 数据源与 MyBatis 隔离
 
@@ -84,19 +87,25 @@ Storage 固定注册以下命名 bean：
 
 ```java
 StorageRef put(StorageWriteCommand command);
+StorageRef putIfAbsent(StorageWriteCommand command);
 ```
 
 读取：
 
 ```java
-StorageMetadata getMetadata(Long storageId);
-byte[] getContent(Long storageId);
+StorageMetadata getMetadata(StorageKey key);
+byte[] getContent(StorageKey key);
 ```
 
-`StorageRef` 只携带 `storageId`、SHA-256 和内容长度，可用于后续任务或消息。字节数组 DTO 做防御性复制，避免调用方修改 adapter 内部数据。
+`StorageKey` 和 `StorageRef` 都以 `(storageId, sha256)` 表示稳定定位引用：SHA-256 先确定唯一物理分片，ID 再使用分片内主键索引定位记录。禁止暴露或保留只按 `storageId` 读取的接口，否则会广播100张表。字节数组 DTO 做防御性复制，避免调用方修改 adapter 内部数据。
 
-common 当前的领域生成器共享同一个 `SnowflakeIdEngine`，因此 storage 领域 ID 与其他领域仍保持全局唯一；
-“storage 域”表示调用和所有权边界，不代表独立号段或独立雪花参数。若未来需要独立号段，应新增独立引擎配置，不能只修改领域名称。
+所有直接绑定 Storage 的表、消息和任务必须同时保存 ID 与 SHA-256。当前订单/支付 event 已保存 `raw_id + payload_sha256`，执行流水补充 `payload_sha256`，Redis Stream 发布 `storageId + storageSha256`。
+
+storage 领域配置为独立 `SnowflakeIdEngine`，拥有自己的毫秒内 sequence；未配置为独立的领域仍回退到全局引擎。独立引擎沿用全局 epoch，但必须占用独立的 `(datacenterId, workerId)`，从而保持与全局 ID 及其他领域 ID 不重复。
+
+当前 receiver 默认全局节点为 `(1,1)`、storage 节点为 `(2,1)`，都可通过环境变量覆盖。多机部署时建议固定全局/storage 的 datacenterId，并为每台机器分配唯一 workerId，例如机器 A 使用 `(1,1)/(2,1)`，机器 B 使用 `(1,2)/(2,2)`。应用只能校验单进程内冲突，跨机器唯一性必须由部署配置保证。
+
+同一 Snowflake 引擎内 ID 严格递增；跨机器或跨独立引擎只能按毫秒时间戳大致有序，无法保证真实申请顺序严格递增。消费排序应使用明确的业务时间、消息版本及稳定的并列排序字段，不能把 storageId 当作跨节点业务顺序。
 
 ## 6. 当前暂不实施
 
@@ -107,9 +116,7 @@ common 当前的领域生成器共享同一个 `SnowflakeIdEngine`，因此 stor
 
 ## 6.1 与 Event 消息版本的关系
 
-Storage 始终保存通过验签且业务键/版本格式有效的原始报文，不负责判断第三方消息的新旧。
-receiver 会为每个新消息版本生成 event；重复版本可能已经写入 Storage，但不会重复生成或发布 event。
-这是为了保持 Storage 写入端口简单且原始数据可审计，后续可通过保留策略清理未引用内容。
+Storage 不负责判断第三方消息版本的新旧，但 `putIfAbsent` 会基于 `(source_system, payload_sha256)` 避免完全相同报文重复落盘。receiver 仍按来源、业务事件键和消息版本决定是否生成 event；不同内容即使属于同一业务版本，也会先形成不同 Storage 引用，再由 event 幂等约束决定是否接受。
 
 ## 7. 后续演进约束
 

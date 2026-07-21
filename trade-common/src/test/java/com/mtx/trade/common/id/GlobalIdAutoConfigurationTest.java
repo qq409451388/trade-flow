@@ -61,9 +61,9 @@ class GlobalIdAutoConfigurationTest {
     @DisplayName("配置预注册领域")
     void preConfiguredDomains() {
         runner.withPropertyValues(
-                "global-id.domains[0]=order",
-                "global-id.domains[1]=payment",
-                "global-id.domains[2]=event"
+                "global-id.domains.order.independent=false",
+                "global-id.domains.payment.independent=false",
+                "global-id.domains.event.independent=false"
         ).run(context -> {
             IdGeneratorRegistry registry = context.getBean(IdGeneratorRegistry.class);
             DomainIdGenerator order = registry.forDomain("order");
@@ -78,6 +78,59 @@ class GlobalIdAutoConfigurationTest {
             assertThat(order.nextId()).isPositive();
             assertThat(payment.nextId()).isPositive();
             assertThat(event.nextId()).isPositive();
+        });
+    }
+
+    @Test
+    @DisplayName("配置领域可使用独立雪花节点")
+    void independentDomainUsesDedicatedNode() {
+        runner.withPropertyValues(
+                "global-id.snowflake.datacenter-id=1",
+                "global-id.snowflake.worker-id=1",
+                "global-id.domains.storage.independent=true",
+                "global-id.domains.storage.datacenter-id=2",
+                "global-id.domains.storage.worker-id=3"
+        ).run(context -> {
+            assertThat(context).hasNotFailed();
+            IdGeneratorRegistry registry = context.getBean(IdGeneratorRegistry.class);
+            long storageId = registry.forDomain("storage").nextId();
+            long fallbackId = registry.forDomain("unconfigured").nextId();
+
+            assertThat(datacenterId(storageId)).isEqualTo(2);
+            assertThat(workerId(storageId)).isEqualTo(3);
+            assertThat(datacenterId(fallbackId)).isEqualTo(1);
+            assertThat(workerId(fallbackId)).isEqualTo(1);
+        });
+    }
+
+    @Test
+    @DisplayName("独立领域缺少节点号时启动失败")
+    void independentDomainRequiresNodeIds() {
+        runner.withPropertyValues(
+                "global-id.domains.storage.independent=true",
+                "global-id.domains.storage.datacenter-id=2"
+        ).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(context.getStartupFailure()).getRootCause()
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("worker-id is required");
+        });
+    }
+
+    @Test
+    @DisplayName("同一进程中的雪花节点号不可重复")
+    void duplicateSnowflakeNodeFails() {
+        runner.withPropertyValues(
+                "global-id.snowflake.datacenter-id=1",
+                "global-id.snowflake.worker-id=1",
+                "global-id.domains.storage.independent=true",
+                "global-id.domains.storage.datacenter-id=1",
+                "global-id.domains.storage.worker-id=1"
+        ).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(context.getStartupFailure()).getRootCause()
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("Duplicate Snowflake node");
         });
     }
 
@@ -123,5 +176,13 @@ class GlobalIdAutoConfigurationTest {
             long id = generator.nextId();
             assertThat(id).isPositive();
         });
+    }
+
+    private static long datacenterId(long id) {
+        return (id >> 17) & 31L;
+    }
+
+    private static long workerId(long id) {
+        return (id >> 12) & 31L;
     }
 }

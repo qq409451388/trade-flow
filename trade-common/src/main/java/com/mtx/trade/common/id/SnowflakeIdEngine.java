@@ -18,7 +18,7 @@ import com.mtx.trade.common.id.exception.TimestampOverflowException;
  * </pre>
  *
  * <p>线程安全：{@link #nextId()} 使用 {@code synchronized} 保证正确性。
- * 所有默认生成器（全局、领域）共享同一个 {@code SnowflakeIdEngine} 实例。</p>
+ * 默认领域生成器共享全局引擎，配置为独立的领域拥有单独的引擎实例。</p>
  *
  * <h3>时钟回拨</h3>
  * <ul>

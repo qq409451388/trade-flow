@@ -1,5 +1,7 @@
 package com.mtx.trade.storage.local;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.mtx.trade.storage.api.StorageKey;
 import com.mtx.trade.storage.api.StorageMetadata;
 import com.mtx.trade.storage.api.StorageReader;
 import com.mtx.trade.storage.local.entity.StorageBlobDO;
@@ -18,11 +20,13 @@ public class LocalStorageReaderAdapter implements StorageReader {
 
     @Override
     @Transactional(transactionManager = "storageTransactionManager", readOnly = true)
-    public StorageMetadata getMetadata(Long storageId) {
-        if (storageId == null) {
+    public StorageMetadata getMetadata(StorageKey key) {
+        if (key == null) {
             return null;
         }
-        StorageDO storage = storageDbService.getById(storageId);
+        StorageDO storage = storageDbService.getOne(new LambdaQueryWrapper<StorageDO>()
+                .eq(StorageDO::getPayloadSha256, key.sha256())
+                .eq(StorageDO::getId, key.storageId()), false);
         if (storage == null) {
             return null;
         }
@@ -37,11 +41,13 @@ public class LocalStorageReaderAdapter implements StorageReader {
 
     @Override
     @Transactional(transactionManager = "storageTransactionManager", readOnly = true)
-    public byte[] getContent(Long storageId) {
-        if (storageId == null) {
+    public byte[] getContent(StorageKey key) {
+        if (key == null) {
             return null;
         }
-        StorageBlobDO blob = storageBlobDbService.getById(storageId);
+        StorageBlobDO blob = storageBlobDbService.getOne(new LambdaQueryWrapper<StorageBlobDO>()
+                .eq(StorageBlobDO::getPayloadSha256, key.sha256())
+                .eq(StorageBlobDO::getId, key.storageId()), false);
         return blob == null || blob.getContent() == null ? null : blob.getContent().clone();
     }
 }

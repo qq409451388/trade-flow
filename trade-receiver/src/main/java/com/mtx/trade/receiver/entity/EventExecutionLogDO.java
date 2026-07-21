@@ -39,6 +39,11 @@ public class EventExecutionLogDO implements Serializable {
     private Long rawId;
 
     /**
+     * 原始请求体字节SHA-256，与 rawId 共同定位 Storage。
+     */
+    private byte[] payloadSha256;
+
+    /**
      * 触发方式：1首次消费；2自动重试；3人工重跑；4批量回放
      */
     private Integer triggerType;

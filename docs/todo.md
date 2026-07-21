@@ -18,7 +18,7 @@
   - pipeline 业务表继续放在 `trade_pipeline`。
   - pipeline 读取 storage 时使用独立的、只读优先的 storage 数据源。
 - receiver 负责写 storage，pipeline 负责读 storage。业务代码不应直接依赖 Storage Mapper/DO 完成读写。
-- `trade_storage`、`trade_storage_blob` 使用相同 `id`，按 `id % 100` 路由到 `_00 ~ _99`。
+- `trade_storage`、`trade_storage_blob` 使用相同 `id + payload_sha256`，按完整 SHA-256 无符号值模100路由到 `_00 ~ _99`。
 - pipeline 未来也会分表，但规则不同：pipeline 业务表计划按业务时间分表（按日还是按月、时间字段、保留周期尚未最终确定）。
 
 ### 后期演进目标
@@ -27,7 +27,7 @@
 - receiver、pipeline 可能进一步服务化部署。
 - 后期可以增加独立 `trade-storage-service`，receiver/pipeline 通过远程客户端访问。
 - 从本地数据库实现切换到远程 storage 服务时，receiver/pipeline 的核心业务代码不应修改，只替换接口实现和部署配置。
-- storage 的 `id % 100` 应视为稳定的虚拟分片编号。未来拆 MySQL 时迁移/重新分配 00~99 逻辑桶，不要改成 `id % 数据库实例数`，否则扩容会导致历史数据大面积重新路由。
+- storage 的 `unsigned(payload_sha256) % 100` 应视为稳定的虚拟分片编号。未来拆 MySQL 时迁移/重新分配 00~99 逻辑桶，不要改成 `SHA % 数据库实例数`，否则扩容会导致历史数据大面积重新路由。
 
 ## 二、当前代码状态（2026-07-21）
 
@@ -97,8 +97,8 @@ public interface StorageWriter {
 }
 
 public interface StorageReader {
-    StorageMetadata getMetadata(Long storageId);
-    byte[] getContent(Long storageId);
+    StorageMetadata getMetadata(StorageKey key);
+    byte[] getContent(StorageKey key);
 }
 ```
 
@@ -138,7 +138,7 @@ trade-storage-local-starter
   StorageDO / StorageBlobDO
   Mapper / DbService
   本地 StorageWriter / StorageReader 实现
-  storage 的 id % 100 分表规则
+  storage 的 SHA-256 % 100 分表规则
 
 trade-storage-client（后期）
   StorageWriter / StorageReader 的 HTTP 或 RPC 实现
@@ -161,7 +161,7 @@ public interface ShardingRuleContributor {
 
 具体业务分别提供：
 
-- `StorageShardingRuleContributor`：只定义 `trade_storage` / `trade_storage_blob` 的 `id % 100` 规则。
+- `StorageShardingRuleContributor`：只定义 `trade_storage` / `trade_storage_blob` 的完整 SHA-256 模100规则。
 - `PipelineTimeShardingRuleContributor`：位于 pipeline 业务模块，只定义 pipeline 表的时间分片规则。
 
 规则是否加载由“是否引入对应 starter/adapter”决定，不以 ShardingSphere classpath 作为业务功能开关，也不要求无关模块配置 `trade.storage.enabled=false`。
@@ -176,7 +176,7 @@ public interface ShardingRuleContributor {
 trade-receiver
   receiver/storage 写数据源
     -> MySQL Server / trade_flow
-    -> storage 表按 id % 100 分表
+    -> storage 表按 SHA-256 % 100 分表
 
 trade-pipeline
   pipeline 主数据源
@@ -185,7 +185,7 @@ trade-pipeline
 
   storage 只读数据源
     -> 同一 MySQL Server / trade_flow
-    -> storage 表按 id % 100 分表
+    -> storage 表按 SHA-256 % 100 分表
 ```
 
 这样初期只是同机跨 schema 访问，后期将 storage 数据源 URL 改到其他 MySQL Server 即可，不需要修改 pipeline 业务代码。
@@ -230,7 +230,7 @@ trade:
 
 - `put` 幂等：调用方提供稳定 requestId，或基于来源系统 + 业务事件 ID 建唯一约束。
 - receiver 在 storage 写成功后再发布给 pipeline，推荐事务 Outbox，避免数据库写入和消息发送双写不一致。
-- 消息只携带 `storageId`、摘要、内容长度等引用，不携带 DO 或物理表信息。
+- 消息只携带 `storageId`、`storageSha256`、内容长度等引用，不携带 DO 或物理表信息。
 - pipeline 对“消息已到但 storage 暂时不可见”支持退避重试，兼容主从延迟和异步迁移。
 - 大报文后期可以落 OSS，StorageReader 返回流或受控下载引用，业务方不感知 BLOB/OSS 存储类型。
 - 数据迁移采用双写/CDC、回填、校验、切读步骤；业务模块不参与物理分片迁移。
@@ -251,7 +251,7 @@ trade:
 - [x] 删除 `StorageShardingAutoConfiguration` 对全局主 `dataSource` 的抢占。
 - [ ] 抽取通用 ShardingSphere 数据源装配层。
 - [ ] 抽取 `ShardingRuleContributor` 扩展点。
-- [ ] storage 注册 ID 分表 contributor。
+- [ ] storage 注册 SHA-256 分表 contributor。
 - [ ] pipeline 注册时间分表 contributor。
 - [x] pipeline 使用默认 pipeline `dataSource` 和命名 `storageDataSource` 两套数据源。
 - [x] Storage Mapper 明确绑定 `storageSqlSessionFactory`；业务 Mapper 继续绑定默认 factory。
@@ -269,16 +269,16 @@ trade:
 ### 阶段 D：为服务化做准备
 
 - [ ] 增加 local/remote adapter 切换机制。
-- [ ] 增加 put 幂等键和数据库唯一约束。
+- [x] 基于 `(sourceSystem, payloadSha256)` 增加 putIfAbsent 幂等和分片内唯一约束。
 - [ ] 增加 receiver Outbox 及 pipeline 重试机制。
 - [ ] 设计 storage-service API，但初期不启动第三个 Boot。
 - [ ] 增加只读账号和最小权限配置。
 
 ## 七、验收标准
 
-- receiver 写入 storage 时，相同 ID 的 metadata/blob 路由到相同 `_00 ~ _99` 后缀，并在同一事务中提交。
-- pipeline 能通过 `StorageReader` 按 storageId 读取 receiver 写入的数据，业务代码不知道物理表名。
-- pipeline 的时间分表规则和 storage 的 ID 分表规则相互独立。
+- receiver 写入 storage 时，相同 SHA-256 的 metadata/blob 路由到相同 `_00 ~ _99` 后缀，并在同一事务中提交。
+- pipeline 能通过 `StorageReader` 按 `(storageId, storageSha256)` 读取 receiver 写入的数据，业务代码不知道物理表名。
+- pipeline 的时间分表规则和 storage 的 SHA-256 分表规则相互独立。
 - receiver 启动时不需要 pipeline 规则；pipeline 可以同时装配 pipeline 主数据源和 storage 只读数据源。
 - 任一不需要 storage 的模块不会因为引入 common 或 ShardingSphere 而自动加载 storage Mapper、Service 或规则。
 - `sql-show` 可通过配置控制；MyBatis 可关闭冗余 `StdOutImpl` 日志，只保留需要的 ShardingSphere 实际 SQL。

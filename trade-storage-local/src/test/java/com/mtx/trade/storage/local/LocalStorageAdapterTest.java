@@ -1,5 +1,6 @@
 package com.mtx.trade.storage.local;
 
+import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.mtx.trade.storage.api.StorageRef;
 import com.mtx.trade.storage.api.StorageWriteCommand;
 import com.mtx.trade.storage.api.StorageWriteException;
@@ -9,10 +10,12 @@ import com.mtx.trade.storage.local.service.db.StorageBlobDbService;
 import com.mtx.trade.storage.local.service.db.StorageDbService;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.dao.DuplicateKeyException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -39,6 +42,8 @@ class LocalStorageAdapterTest {
         verify(storageBlobDbService).save(blobCaptor.capture());
         assertThat(storageCaptor.getValue().getId()).isEqualTo(STORAGE_ID);
         assertThat(blobCaptor.getValue().getId()).isEqualTo(STORAGE_ID);
+        assertThat(blobCaptor.getValue().getPayloadSha256())
+                .containsExactly(storageCaptor.getValue().getPayloadSha256());
         assertThat(result.storageId()).isEqualTo(STORAGE_ID);
     }
 
@@ -60,5 +65,50 @@ class LocalStorageAdapterTest {
         assertThatThrownBy(() -> adapter.put(new StorageWriteCommand(1, 1, new byte[]{1}, null)))
                 .isInstanceOf(StorageWriteException.class)
                 .hasMessageContaining("BLOB");
+    }
+
+    @Test
+    void putIfAbsentShouldReturnExistingWhenContentAlreadyStored() {
+        StorageDO existing = new StorageDO();
+        existing.setId(STORAGE_ID);
+        existing.setPayloadSha256(new byte[32]);
+        existing.setContentLength(10);
+        when(storageDbService.getOne(any(Wrapper.class), anyBoolean())).thenReturn(existing);
+
+        StorageRef result = adapter.putIfAbsent(new StorageWriteCommand(1, 1, new byte[]{1, 2, 3}, null));
+
+        assertThat(result.storageId()).isEqualTo(STORAGE_ID);
+        verify(storageDbService, never()).save(any());
+        verify(storageBlobDbService, never()).save(any());
+    }
+
+    @Test
+    void putIfAbsentShouldInsertWhenContentNotExists() {
+        when(storageDbService.getOne(any(Wrapper.class), anyBoolean())).thenReturn(null);
+        when(storageDbService.save(any())).thenReturn(true);
+        when(storageBlobDbService.save(any())).thenReturn(true);
+
+        StorageRef result = adapter.putIfAbsent(new StorageWriteCommand(1, 1, new byte[]{1, 2, 3}, null));
+
+        assertThat(result.storageId()).isEqualTo(STORAGE_ID);
+        verify(storageDbService).save(any());
+        verify(storageBlobDbService).save(any());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void putIfAbsentShouldReturnWinnerAfterConcurrentUniqueKeyConflict() {
+        StorageDO existing = new StorageDO();
+        existing.setId(200_456L);
+        existing.setPayloadSha256(new byte[32]);
+        existing.setContentLength(10);
+        when(storageDbService.getOne(any(Wrapper.class), anyBoolean()))
+                .thenReturn(null, existing);
+        when(storageDbService.save(any())).thenThrow(new DuplicateKeyException("duplicate sha"));
+
+        StorageRef result = adapter.putIfAbsent(new StorageWriteCommand(1, 1, new byte[]{1, 2, 3}, null));
+
+        assertThat(result.storageId()).isEqualTo(200_456L);
+        verify(storageBlobDbService, never()).save(any());
     }
 }

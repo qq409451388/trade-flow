@@ -2,8 +2,8 @@ package com.mtx.trade.common.id;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
-import java.util.LinkedHashSet;
-import java.util.Set;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * 全局 ID 生成配置。
@@ -17,9 +17,10 @@ import java.util.Set;
  *     max-clock-backward-ms: 5
  *     epoch: 1704067200000
  *   domains:
- *     - order
- *     - payment
- *     - event
+ *     storage:
+ *       independent: true
+ *       datacenter-id: 2
+ *       worker-id: 1
  * </pre>
  */
 @ConfigurationProperties(prefix = "global-id")
@@ -34,7 +35,7 @@ public class GlobalIdProperties {
 
     private SnowflakeProperties snowflake = new SnowflakeProperties();
 
-    private Set<String> domains = new LinkedHashSet<>();
+    private Map<String, DomainProperties> domains = new LinkedHashMap<>();
 
     public boolean isEnabled() {
         return enabled;
@@ -52,12 +53,46 @@ public class GlobalIdProperties {
         this.snowflake = snowflake;
     }
 
-    public Set<String> getDomains() {
+    public Map<String, DomainProperties> getDomains() {
         return domains;
     }
 
-    public void setDomains(Set<String> domains) {
+    public void setDomains(Map<String, DomainProperties> domains) {
         this.domains = domains;
+    }
+
+    public static class DomainProperties {
+
+        /**
+         * false 时仅预注册领域门面，并继续共享全局引擎。
+         */
+        private boolean independent = false;
+        private Long datacenterId;
+        private Long workerId;
+
+        public boolean isIndependent() {
+            return independent;
+        }
+
+        public void setIndependent(boolean independent) {
+            this.independent = independent;
+        }
+
+        public Long getDatacenterId() {
+            return datacenterId;
+        }
+
+        public void setDatacenterId(Long datacenterId) {
+            this.datacenterId = datacenterId;
+        }
+
+        public Long getWorkerId() {
+            return workerId;
+        }
+
+        public void setWorkerId(Long workerId) {
+            this.workerId = workerId;
+        }
     }
 
     public static class SnowflakeProperties {

@@ -19,6 +19,7 @@ public class StorageBlobDO implements Serializable {
 
     @TableId(type = IdType.INPUT)
     private Long id;
+    private byte[] payloadSha256;
     private byte[] content;
     private LocalDateTime createTime;
 }

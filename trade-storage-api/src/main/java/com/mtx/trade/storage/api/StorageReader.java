@@ -5,7 +5,7 @@ package com.mtx.trade.storage.api;
  */
 public interface StorageReader {
 
-    StorageMetadata getMetadata(Long storageId);
+    StorageMetadata getMetadata(StorageKey key);
 
-    byte[] getContent(Long storageId);
+    byte[] getContent(StorageKey key);
 }

@@ -15,16 +15,20 @@ ShardingSphere/Hikari 等持久化依赖。Storage 能力分别位于：
 ## 核心设计
 
 ```
-一个 SnowflakeIdEngine（单例）
+全局 SnowflakeIdEngine（单例）
         |
         +-- GlobalIdGenerator          ← 真全局生成器
         |
         +-- order 领域生成器            ← 委托同一引擎
         +-- payment 领域生成器          ← 委托同一引擎
-        +-- event 领域生成器            ← 委托同一引擎
+        +-- 未配置领域生成器             ← 委托同一引擎
+
+storage SnowflakeIdEngine（可选独立引擎）
+        |
+        +-- storage 领域生成器
 ```
 
-所有生成器共享同一个底层 `SnowflakeIdEngine`，每个领域可独立注入和调用，代码层相互隔离，最终生成的 ID 在所有领域之间全局唯一。
+领域默认共享全局 `SnowflakeIdEngine`；显式配置 `independent: true` 的领域使用独立引擎和 sequence。所有引擎必须分配互不重复的 `(datacenterId, workerId)`，才能保证 ID 在系统内全局唯一。
 
 ## 关键说明
 
@@ -32,12 +36,12 @@ ShardingSphere/Hikari 等持久化依赖。Storage 能力分别位于：
 |------|------|
 | `GlobalIdGenerator` | 真全局生成器，直接委托雪花核心 |
 | `DomainIdGenerator` | 领域级调用入口，默认委托同一雪花核心 |
-| 领域生成器 | 不是独立的节点发号器，不维护独立 sequence |
-| 跨领域唯一性 | 所有领域生成的 ID 默认跨领域全局唯一 |
+| 领域生成器 | 默认共享全局引擎；可配置独立节点和 sequence |
+| 跨领域唯一性 | 依赖所有引擎、所有机器的节点组合全局不重复 |
 | 领域名称 | 不编码到 ID 中，数据库主键统一使用 `BIGINT` |
-| ID 趋势 | 趋势递增，但不严格连续 |
+| ID 趋势 | 单引擎严格递增；跨机器、跨引擎仅按时间戳大致有序 |
 | 禁止 | 不得根据 ID 差值统计业务数量 |
-| datacenterId/workerId | 所有运行实例的组合必须唯一 |
+| datacenterId/workerId | 所有机器、所有独立领域引擎的组合必须全局唯一 |
 | K8s 扩缩容 | 需进一步实现 workerId 自动租约分配 |
 | 数据库主键 | 使用 `BIGINT`，不使用 `AUTO_INCREMENT` |
 
@@ -93,11 +97,20 @@ global-id:
     worker-id: 1           # 0~31，所有实例必须唯一
     max-clock-backward-ms: 5
     epoch: 1704067200000   # 2024-01-01 UTC，固定后不得修改
-  domains:                  # 启动时预注册的领域（可选）
-    - order
-    - payment
-    - event
+  domains:
+    order:                  # 仅预注册，仍共享全局引擎
+      independent: false
+    storage:                # 独立领域引擎
+      independent: true
+      datacenter-id: 2      # 0~31，不得与其他引擎重复
+      worker-id: 1          # 0~31，不得与其他机器重复
 ```
+
+未出现在 `domains` 中的领域会按需创建并回退到全局引擎。独立领域继承全局的 `epoch` 和 `max-clock-backward-ms`，不允许单独修改 epoch，避免破坏 ID 时间位的一致含义。
+
+多机部署建议固定 `datacenter-id` 表示用途、用 `worker-id` 表示机器。例如全局引擎使用 datacenter 1，storage 引擎使用 datacenter 2；机器 A/B 分别使用 worker 1/2。也可使用其他分配方式，但所有组合必须由部署系统统一管理。单个进程会检查自身配置冲突，无法发现另一台机器上的重复节点号。
+
+Snowflake 不能保证两台机器按真实请求先后生成的 ID 严格递增：两台机器可能存在时钟偏差，同一毫秒内 ID 的大小还由节点位决定。若业务必须获得跨机器严格顺序，应使用数据库序列/号段服务或单点发号器，并接受协调开销；不要用 Snowflake ID 代替业务顺序字段。
 
 ## 使用方式
 
@@ -186,7 +199,9 @@ entity.setId(idGeneratorRegistry.forDomain("order").nextId());
 | 10 | 小幅时钟回拨可以恢复 | SnowflakeIdEngineTest |
 | 11 | 大幅时钟回拨抛出异常 | SnowflakeIdEngineTest |
 | 12 | 单毫秒序列耗尽后进入下一毫秒 | SnowflakeIdEngineTest |
+| 13 | 独立领域使用专属雪花节点，未配置领域回退全局节点 | GlobalIdAutoConfigurationTest |
+| 14 | 独立领域缺少节点号或本进程节点号冲突时启动失败 | GlobalIdAutoConfigurationTest |
 
 ```
-Tests run: 26, Failures: 0, Errors: 0, Skipped: 0
+Tests run: 29, Failures: 0, Errors: 0, Skipped: 0
 ```

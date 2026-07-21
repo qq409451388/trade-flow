@@ -26,6 +26,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
+import java.util.HexFormat;
 
 @Slf4j
 @RestController
@@ -45,8 +46,10 @@ public class OrderController {
     private String secret;
 
     @GetMapping("/storage-metadata")
-    public ResponseData<StorageMetadata> storageMetadata(@RequestParam Long storageId) {
-        return ResponseData.success(storageReader.getMetadata(storageId));
+    public ResponseData<StorageMetadata> storageMetadata(
+            @RequestParam Long storageId, @RequestParam String storageSha256) {
+        return ResponseData.success(storageReader.getMetadata(
+                new StorageKey(storageId, parseSha256(storageSha256))));
     }
     @PostMapping("/store-push")
     public FuiouResponse storePush(@RequestBody String payload) {
@@ -78,7 +81,7 @@ public class OrderController {
                 SourceSystem.FUIOU.getCode(),
                 ContentType.ORDER.getCode(), payload.getBytes(StandardCharsets.UTF_8), LocalDateTime.now()
         );
-        return storageWriter.put(storageWriteCommand);
+        return storageWriter.putIfAbsent(storageWriteCommand);
     }
 
     private OrderEventDO createEvent(String payload, StorageRef storageRef) {
@@ -103,6 +106,17 @@ public class OrderController {
             } catch (Exception e) {
                 log.warn("stream publish failed, eventId={}", eventDO.getId(), e);
             }
+        }
+    }
+
+    private static byte[] parseSha256(String value) {
+        try {
+            if (value == null || value.length() != 64) {
+                throw new IllegalArgumentException("invalid length");
+            }
+            return HexFormat.of().parseHex(value);
+        } catch (IllegalArgumentException e) {
+            throw new BusinessException(ErrorCode.PARAM_INVALID, "storageSha256 必须为64位十六进制字符串");
         }
     }
 }

@@ -4,11 +4,17 @@ import org.apache.shardingsphere.infra.datanode.DataNodeInfo;
 import org.apache.shardingsphere.infra.spi.type.typed.TypedSPILoader;
 import org.apache.shardingsphere.sharding.api.config.ShardingRuleConfiguration;
 import org.apache.shardingsphere.sharding.api.config.rule.ShardingTableRuleConfiguration;
+import org.apache.shardingsphere.sharding.api.config.strategy.sharding.StandardShardingStrategyConfiguration;
 import org.apache.shardingsphere.sharding.api.sharding.standard.PreciseShardingValue;
 import org.apache.shardingsphere.sharding.api.sharding.standard.StandardShardingAlgorithm;
 import org.apache.shardingsphere.sharding.spi.ShardingAlgorithm;
 import org.junit.jupiter.api.Test;
 
+import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -33,23 +39,54 @@ class StorageShardingRuleFactoryTest {
         });
         assertThat(rule.getBindingTableGroups()).singleElement().satisfies(binding ->
                 assertThat(binding.getReference()).isEqualTo("trade_storage,trade_storage_blob"));
+        assertThat(tables.values()).allSatisfy(table -> {
+            StandardShardingStrategyConfiguration strategy =
+                    (StandardShardingStrategyConfiguration) table.getTableShardingStrategy();
+            assertThat(strategy.getShardingColumn()).isEqualTo("payload_sha256");
+            assertThat(strategy.getShardingAlgorithmName()).isEqualTo("storage_sha256");
+        });
     }
 
     @Test
-    @SuppressWarnings("unchecked")
-    void shouldRouteByIdModuloWithTwoDigitSuffix() {
+    void shouldUseFullUnsignedSha256Modulo() {
+        byte[] sha256 = new byte[32];
+        sha256[0] = (byte) 0xFF;
+        sha256[31] = 0x7F;
+
+        int expected = new BigInteger(1, sha256).mod(BigInteger.valueOf(100)).intValue();
+
+        assertThat(Sha256ShardingAlgorithm.shardIndex(sha256)).isEqualTo(expected);
+    }
+
+    @Test
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void shouldRouteBinaryShaToTwoDigitPhysicalTable() {
+        byte[] sha256 = new byte[32];
+        sha256[31] = 99;
         ShardingRuleConfiguration rule = StorageShardingRuleFactory.create();
-        StandardShardingAlgorithm<Comparable<?>> algorithm = (StandardShardingAlgorithm<Comparable<?>>)
-                TypedSPILoader.getService(
-                        ShardingAlgorithm.class,
-                        "INLINE",
-                        rule.getShardingAlgorithms().get("trade_storage_inline").getProps());
+        StandardShardingAlgorithm algorithm = (StandardShardingAlgorithm) TypedSPILoader.getService(
+                ShardingAlgorithm.class,
+                "CLASS_BASED",
+                rule.getShardingAlgorithms().get("storage_sha256").getProps());
+        PreciseShardingValue shardingValue = new PreciseShardingValue(
+                "trade_storage", "payload_sha256", new DataNodeInfo("", 2, '0'), sha256);
 
         String target = algorithm.doSharding(
-                List.of("trade_storage_00", "trade_storage_01", "trade_storage_99"),
-                new PreciseShardingValue<>(
-                        "trade_storage", "id", new DataNodeInfo("", 2, '0'), 101L));
+                List.of("trade_storage_00", "trade_storage_01", "trade_storage_99"), shardingValue);
 
-        assertThat(target).isEqualTo("trade_storage_01");
+        assertThat(target).isEqualTo("trade_storage_99");
+    }
+
+    @Test
+    void shouldDistributeSha256SamplesAcrossAllBuckets() throws NoSuchAlgorithmException {
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        Map<Integer, Integer> counts = new HashMap<>();
+        for (int i = 0; i < 10_000; i++) {
+            byte[] sha256 = digest.digest(Integer.toString(i).getBytes(StandardCharsets.UTF_8));
+            counts.merge(Sha256ShardingAlgorithm.shardIndex(sha256), 1, Integer::sum);
+        }
+
+        assertThat(counts).hasSize(100);
+        assertThat(counts.values()).allMatch(each -> each >= 65 && each <= 135);
     }
 }

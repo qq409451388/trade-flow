@@ -15,13 +15,14 @@ public interface EventExecutionLogService {
      * @param eventType       事件类型：1订单；2支付
      * @param eventId         关联订单事件或支付事件ID
      * @param rawId           关联trade_storage.id
+     * @param payloadSha256   与 rawId 共同定位 Storage 的SHA-256
      * @param triggerType     触发方式：1首次消费；2自动重试；3人工重跑；4批量回放
      * @param executionStatus 执行结果：1成功；2失败；3忽略
      * @param message         执行结果说明
      * @param operatorName    操作人，自动执行时为空
      * @return 保存后的执行流水
      */
-    EventExecutionLogDO log(int eventType, Long eventId, Long rawId, int triggerType,
+    EventExecutionLogDO log(int eventType, Long eventId, Long rawId, byte[] payloadSha256, int triggerType,
                             int executionStatus, String message, String operatorName);
 
     /**
