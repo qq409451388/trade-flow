@@ -1,32 +1,16 @@
 # trade-common
 
-交易公共组件，提供可复用的分布式 ID 生成组件，以及统一的原始报文存储实体与分表契约。
+交易公共组件，提供可复用的分布式 ID、统一响应、异常和基础枚举。
 
-## Storage 分表接入
+## 模块边界
 
-`trade-common` 内固定定义以下内容：
+`trade-common` 保持轻量，不包含 Storage DO、Mapper、数据源或分表实现，也不传递
+ShardingSphere/Hikari 等持久化依赖。Storage 能力分别位于：
 
-- `StorageDO`、`StorageBlobDO` 及其 Mapper、DB Service、业务 Service
-- `trade_storage`、`trade_storage_blob` 按 `id % 100` 路由到 `_00 ~ _99`
-- 两张表的绑定表关系，保证相同 `id` 路由到相同后缀
+- `trade-storage-api`：稳定的 Storage 读写端口和 DTO。
+- `trade-storage-local`：单机 MySQL adapter、持久化实体和分表规则。
 
-接入方不需要扫描 common 包、引入 ShardingSphere，也不需要重复声明分表规则；
-引入 `trade-common` 后只需使用 Spring Boot 标准数据源配置：
-
-```yaml
-spring:
-  datasource:
-    url: jdbc:mysql://127.0.0.1:3306/trade_flow
-    username: root
-    password:
-    driver-class-name: com.mysql.cj.jdbc.Driver
-    hikari:
-      maximum-pool-size: 10
-```
-
-自动配置会保留真实连接池为 `storageActualDataSource`，并将包装后的
-ShardingSphere 数据源作为主 `dataSource` 提供给 MyBatis-Plus 和事务管理器。
-如需关闭该能力，可配置 `trade.storage.sharding.enabled=false`。
+详细设计见根目录 `docs/storage-design.md`。
 
 ## 核心设计
 

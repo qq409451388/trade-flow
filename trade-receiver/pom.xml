@@ -30,6 +30,16 @@
             <version>${project.version}</version>
         </dependency>
         <dependency>
+            <groupId>com.mtx.trade</groupId>
+            <artifactId>trade-storage-api</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.mtx.trade</groupId>
+            <artifactId>trade-storage-local</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>

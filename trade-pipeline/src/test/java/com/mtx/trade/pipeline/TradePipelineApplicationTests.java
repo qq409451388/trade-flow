@@ -6,7 +6,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 /**
  * 启动上下文加载测试。
  */
-@SpringBootTest
+@SpringBootTest(properties = "trade.storage.local.enabled=false")
 class TradePipelineApplicationTests {
 
     @Test

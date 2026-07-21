@@ -1,5 +1,4 @@
 spring:
-  # common 负责 storage 分表规则，接入方只提供标准数据源配置
   datasource:
     url: jdbc:mysql://127.0.0.1:3306/trade_flow?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8&useSSL=false&allowPublicKeyRetrieval=true&connectTimeout=10000&socketTimeout=600000&tcpKeepAlive=true
     username: root
@@ -27,3 +26,18 @@ spring:
           max-idle: 8
           min-idle: 0
           max-wait: 3s
+
+trade:
+  storage:
+    local:
+      sql-show: true
+    datasource:
+      url: ${spring.datasource.url}
+      username: ${spring.datasource.username}
+      password: ${spring.datasource.password}
+      driver-class-name: ${spring.datasource.driver-class-name}
+      hikari:
+        maximum-pool-size: 10
+        minimum-idle: 1
+        connection-timeout: 30000
+        validation-timeout: 5000

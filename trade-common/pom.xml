@@ -21,7 +21,6 @@
         <java.version>17</java.version>
         <lombok.version>1.18.42</lombok.version>
         <mybatis-plus.version>3.5.9</mybatis-plus.version>
-        <shardingsphere.version>5.5.2</shardingsphere.version>
     </properties>
 
     <dependencies>
@@ -46,17 +45,6 @@
             <version>${mybatis-plus.version}</version>
             <optional>true</optional>
         </dependency>
-        <!-- storage 是 common 对外提供的完整能力，分表运行时随 common 一并传递 -->
-        <dependency>
-            <groupId>org.apache.shardingsphere</groupId>
-            <artifactId>shardingsphere-jdbc</artifactId>
-            <version>${shardingsphere.version}</version>
-        </dependency>
-        <!-- common 使用标准 spring.datasource.hikari 参数创建真实连接池 -->
-        <dependency>
-            <groupId>com.zaxxer</groupId>
-            <artifactId>HikariCP</artifactId>
-        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
@@ -66,8 +54,6 @@
 
     <build>
         <plugins>
-            <!-- 显式声明注解处理器路径，避免引入 ShardingSphere 后 classpath
-                 上的注解处理器发现机制被干扰导致 Lombok 失效 -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>

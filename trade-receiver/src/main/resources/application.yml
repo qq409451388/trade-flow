@@ -13,10 +13,10 @@ spring:
 
 mybatis-plus:
   mapper-locations: classpath*:/mapper/**/*.xml
-  type-aliases-package: com.mtx.trade.common.storage.entity,com.mtx.trade.receiver.entity
+  type-aliases-package: com.mtx.trade.receiver.entity
   configuration:
     map-underscore-to-camel-case: true
-    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+    log-impl: org.apache.ibatis.logging.nologging.NoLoggingImpl #org.apache.ibatis.logging.stdout.StdOutImpl
   global-config:
     db-config:
       logic-delete-field: deleted
@@ -32,6 +32,12 @@ global-id:
   domains:
     - order
     - payment
+
+trade:
+  storage:
+    local:
+      enabled: true
+      sql-show: false
 
 management:
   endpoints:

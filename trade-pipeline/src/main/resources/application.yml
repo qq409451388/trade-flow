@@ -13,12 +13,18 @@ mybatis-plus:
   type-aliases-package: com.mtx.trade.pipeline.entity
   configuration:
     map-underscore-to-camel-case: true
-    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+    log-impl: org.apache.ibatis.logging.nologging.NoLoggingImpl
   global-config:
     db-config:
       logic-delete-field: deleted
       logic-delete-value: 1
       logic-not-delete-value: 0
+
+trade:
+  storage:
+    local:
+      enabled: true
+      sql-show: false
 
 management:
   endpoints:

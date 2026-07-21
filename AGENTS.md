@@ -3,6 +3,13 @@
 ## 项目通用规范
 1. 接口业务逻辑中需要使用异常的场景，建议使用BusinessException，以返回标准数据格式
 
+## 架构与模块边界
+1. 业务模块访问 Storage 只能依赖 `trade-storage-api` 的 `StorageWriter`、`StorageReader` 和 DTO，禁止直接依赖 Storage DO、Mapper、DB Service 或物理分表名。
+2. `trade-common` 保持轻量，不得无条件传递 MyBatis、ShardingSphere、数据库连接池等持久化重依赖；具体持久化能力放到对应 adapter/starter 模块。
+3. 多数据源必须使用明确的 bean 名、`SqlSessionFactory` 和事务管理器绑定，禁止公共模块抢占通用 `dataSource` 或依赖 `@Primary` 猜测 Mapper 归属。
+4. Storage 的 `id % 100` 是稳定虚拟分片契约。扩容时迁移或重新分配 `_00 ~ _99` 逻辑桶，禁止改成 `id % 数据库实例数`。
+5. 当前阶段只采用进程内 Java adapter 直连单台 MySQL；未经明确设计评审，不新增独立 Storage 服务、RPC 或分布式中间件。
+
 ## MyBatis-Plus 使用规范
 1. 后端新增数据库表对应的 DO/Mapper 时，应同步新增 `com.mtx.trade.service.db.XxxDbService` 和 `com.mtx.trade.service.db.impl.XxxDbServiceImpl`。
 2. `XxxDbService` 继承 `IService<XxxDO>`，`XxxDbServiceImpl` 继承 `ServiceImpl<XxxMapper, XxxDO>` 并实现对应 DB Service。
