@@ -10,16 +10,39 @@
 版本幂等键：
 
 - 订单：`source_system + third_event_key + message_version`
-- 支付：`source_system + event_key + message_version`
+- 支付：`source_system + third_event_key + message_version`
 
-相同事件键、相同版本重复推送不会生成第二条 event，也不会重复发布到 Redis Stream。
+相同事件键、相同版本重复推送不会生成第二条 event。为保证至少一次投递，未 ACK 的 event 允许重复发布到 Redis Stream。
 
 ## 入库行为
 
-receiver 固定保存并发布所有版本，不提供版本保留策略配置。每个新版本保存一条 event，消费端根据
-`eventKey + messageVersion` 决定是否处理。相同业务事件的旧版本晚到时仍会入库和发布，receiver 不判断版本新旧。
+ingress 固定保存并发布所有版本，不提供版本保留策略配置。每个新版本保存一条 event，消费端根据
+`eventKey + messageVersion` 决定是否处理。相同业务事件的旧版本晚到时仍会入库和发布，ingress 不判断版本新旧。
 
-相同事件键、相同版本的重复推送由数据库唯一键兜底：不产生第二条 event，也不重复发布。
+相同事件键、相同版本的重复推送由数据库唯一键兜底，不产生第二条 event。
+
+## Ingress 投递与 ACK
+
+event 表只表示 Ingress 是否已将事件可靠移交给 Pipeline：
+
+- `acked=0`：event 已在 Ingress 入库，Pipeline 尚未确认接管。
+- `acked=1`：Pipeline 已将事件持久化到自己的 Inbox、任务表或执行表，并向 Ingress ACK。
+
+Ingress 在 event 事务提交后立即发布一次，并在第 1、5、10 分钟检查 ACK 状态后进行短期补发。定时任务每15分钟扫描
+`acked=0 AND create_time <= 当前时间-15分钟` 的记录并再次发布。多 Ingress 实例通过 Redis 锁避免同时执行扫描任务；Redis
+Stream 仍是至少一次投递，Pipeline 必须按 `contentType + eventId` 幂等接管。
+
+Pipeline 接管后调用：
+
+```http
+POST /trade-ingress/event/ack
+Content-Type: application/json
+
+{"contentType":1,"eventId":123}
+```
+
+ACK 更新是幂等操作。`acked=1` 只表示 Pipeline 已可靠接管，不表示执行成功；Pipeline 执行成功、失败和重试状态均不写回
+`trade_order_event` 或 `trade_payment_event`。
 
 ## 富友字段提取
 

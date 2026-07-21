@@ -7,26 +7,26 @@
 ### 初期形态
 
 - 初期不增加独立的 storage 服务，只保留两个 Spring Boot 应用：
-  - `trade-receiver`：接收数据并执行 `put storage`。
+  - `trade-ingress`：接收数据并执行 `put storage`。
   - `trade-pipeline`：消费后续任务并执行 `get storage`。
 - 两个应用初期复用同一台 MySQL Server。
 - 当前配置中的逻辑库：
-  - receiver 使用 `trade_flow`。
+  - ingress 使用 `trade_flow`。
   - pipeline 使用 `trade_pipeline`。
 - 推荐继续保留逻辑库边界，不因为在同一台 MySQL Server 就把所有表混进同一个 schema：
-  - storage 表暂时由 receiver 所在的 `trade_flow`（或后续明确命名的 `trade_storage` schema）承载。
+  - storage 表暂时由 ingress 所在的 `trade_flow`（或后续明确命名的 `trade_storage` schema）承载。
   - pipeline 业务表继续放在 `trade_pipeline`。
   - pipeline 读取 storage 时使用独立的、只读优先的 storage 数据源。
-- receiver 负责写 storage，pipeline 负责读 storage。业务代码不应直接依赖 Storage Mapper/DO 完成读写。
+- ingress 负责写 storage，pipeline 负责读 storage。业务代码不应直接依赖 Storage Mapper/DO 完成读写。
 - `trade_storage`、`trade_storage_blob` 使用相同 `id + payload_sha256`，按完整 SHA-256 无符号值模100路由到 `_00 ~ _99`。
 - pipeline 未来也会分表，但规则不同：pipeline 业务表计划按业务时间分表（按日还是按月、时间字段、保留周期尚未最终确定）。
 
 ### 后期演进目标
 
 - storage MySQL 可能迁移到独立机器或拆成多个 MySQL 实例。
-- receiver、pipeline 可能进一步服务化部署。
-- 后期可以增加独立 `trade-storage-service`，receiver/pipeline 通过远程客户端访问。
-- 从本地数据库实现切换到远程 storage 服务时，receiver/pipeline 的核心业务代码不应修改，只替换接口实现和部署配置。
+- ingress、pipeline 可能进一步服务化部署。
+- 后期可以增加独立 `trade-storage-service`，ingress/pipeline 通过远程客户端访问。
+- 从本地数据库实现切换到远程 storage 服务时，ingress/pipeline 的核心业务代码不应修改，只替换接口实现和部署配置。
 - storage 的 `unsigned(payload_sha256) % 100` 应视为稳定的虚拟分片编号。未来拆 MySQL 时迁移/重新分配 00~99 逻辑桶，不要改成 `SHA % 数据库实例数`，否则扩容会导致历史数据大面积重新路由。
 
 ## 二、当前代码状态（2026-07-21）
@@ -36,7 +36,7 @@
 - 新增轻量 `trade-storage-api`，提供稳定读写端口和 DTO。
 - 新增 `trade-storage-local`，承载 MyBatis-Plus、Hikari、ShardingSphere、DO/Mapper/DB Service 和本地 adapter。
 - `trade-common` 已移除 Storage 持久化代码及 ShardingSphere/Hikari 传递依赖。
-- receiver/pipeline 均使用独立命名的 Storage 数据源；Storage Mapper 固定绑定 `storageSqlSessionFactory`。
+- ingress/pipeline 均使用独立命名的 Storage 数据源；Storage Mapper 固定绑定 `storageSqlSessionFactory`。
 - 本阶段 Storage schema 继续使用 `trade_flow`，pipeline 通过同机只读连接读取。
 
 以下内容为改造前状态记录：
@@ -55,7 +55,7 @@
 - 两张表配置为 binding tables。
 - common 自动扫描 storage Mapper 并注册 storage Service。
 - `StorageServiceImpl.saveRawData` 已加事务。
-- receiver 使用标准 `spring.datasource` 配置。
+- ingress 使用标准 `spring.datasource` 配置。
 - ShardingSphere 的 `sql-show` 当前被用户改成了 `true`。
 
 当前实现存在的架构问题：
@@ -82,14 +82,14 @@
 注意：当前工作区可能存在用户未提交修改。最近检查时至少包含：
 
 - `trade-common/.../StorageShardingAutoConfiguration.java`：用户把 `sql-show` 改为 `true`。
-- `trade-receiver/.../OrderController.java`：存在用户修改，不属于本改造时不要覆盖。
-- `trade-receiver/src/main/resources/application.yml`：存在用户修改，编辑前先查看 diff。
+- `trade-ingress/.../OrderController.java`：存在用户修改，不属于本改造时不要覆盖。
+- `trade-ingress/src/main/resources/application.yml`：存在用户修改，编辑前先查看 diff。
 
 ## 三、目标架构
 
 ### 1. 稳定业务端口
 
-receiver/pipeline 只依赖稳定接口，不直接调用 Storage Mapper/DB Service：
+ingress/pipeline 只依赖稳定接口，不直接调用 Storage Mapper/DB Service：
 
 ```java
 public interface StorageWriter {
@@ -112,7 +112,7 @@ public record StorageRef(
 }
 ```
 
-- receiver 只注入 `StorageWriter`。
+- ingress 只注入 `StorageWriter`。
 - pipeline 只注入 `StorageReader`。
 - `StorageDO`、`StorageBlobDO`、Mapper、表名和分片后缀都是本地持久化实现细节，不作为跨模块业务 API 返回值。
 - 如果短期确实有代码需要引用 StorageDO，应明确这是 persistence 层依赖，不能让业务流程以 DO 作为稳定契约。
@@ -170,11 +170,11 @@ public interface ShardingRuleContributor {
 
 ## 四、初期推荐部署与数据源拓扑
 
-初期仍然只有 receiver、pipeline 两个 Boot，二者直连同一台 MySQL Server，不增加网络 storage 服务：
+初期仍然只有 ingress、pipeline 两个 Boot，二者直连同一台 MySQL Server，不增加网络 storage 服务：
 
 ```text
-trade-receiver
-  receiver/storage 写数据源
+trade-ingress
+  ingress/storage 写数据源
     -> MySQL Server / trade_flow
     -> storage 表按 SHA-256 % 100 分表
 
@@ -192,7 +192,7 @@ trade-pipeline
 
 数据源与 Mapper 绑定要求：
 
-- receiver 的业务 Mapper 和 storage Mapper可以共用 receiver/storage ShardingSphereDataSource（前提是都位于 `trade_flow`）。
+- ingress 的业务 Mapper 和 storage Mapper可以共用 ingress/storage ShardingSphereDataSource（前提是都位于 `trade_flow`）。
 - pipeline Mapper绑定 `pipelineSqlSessionFactory`。
 - pipeline 中的 storage Mapper绑定 `storageReadSqlSessionFactory`。
 - 两套事务管理器必须命名清晰；pipeline 的 storage 查询使用只读事务。
@@ -205,14 +205,14 @@ trade-pipeline
 本地模式：
 
 ```text
-receiver -> StorageWriter -> LocalStorageAdapter -> storage MySQL
+ingress -> StorageWriter -> LocalStorageAdapter -> storage MySQL
 pipeline -> StorageReader -> LocalStorageAdapter -> storage MySQL
 ```
 
 远程模式：
 
 ```text
-receiver -> StorageWriter -> RemoteStorageClient -> storage-service -> MySQL/OSS
+ingress -> StorageWriter -> RemoteStorageClient -> storage-service -> MySQL/OSS
 pipeline -> StorageReader -> RemoteStorageClient -> storage-service -> MySQL/OSS
 ```
 
@@ -229,7 +229,7 @@ trade:
 分布式阶段必须补齐：
 
 - `put` 幂等：调用方提供稳定 requestId，或基于来源系统 + 业务事件 ID 建唯一约束。
-- receiver 在 storage 写成功后再发布给 pipeline，推荐事务 Outbox，避免数据库写入和消息发送双写不一致。
+- ingress 在 storage 写成功后再发布给 pipeline，推荐事务 Outbox，避免数据库写入和消息发送双写不一致。
 - 消息只携带 `storageId`、`storageSha256`、内容长度等引用，不携带 DO 或物理表信息。
 - pipeline 对“消息已到但 storage 暂时不可见”支持退避重试，兼容主从延迟和异步迁移。
 - 大报文后期可以落 OSS，StorageReader 返回流或受控下载引用，业务方不感知 BLOB/OSS 存储类型。
@@ -241,10 +241,10 @@ trade:
 
 - [x] 新增稳定的 `StorageWriter`、`StorageReader`、Command/DTO。
 - [x] 将当前 `StorageServiceImpl` 改造为本地 adapter，实现上述端口。
-- [x] receiver 写入流程只注入 `StorageWriter`；临时查询端点只注入 `StorageReader`。
+- [x] ingress 写入流程只注入 `StorageWriter`；临时查询端点只注入 `StorageReader`。
 - [ ] pipeline 后续读取流程只注入 `StorageReader`。
 - [x] 业务代码不再返回或传递 StorageDO。
-- [x] 保持 receiver、pipeline 两个 Boot，仍直连同一台 MySQL Server。
+- [x] 保持 ingress、pipeline 两个 Boot，仍直连同一台 MySQL Server。
 
 ### 阶段 B：拆分数据源装配与业务规则
 
@@ -270,31 +270,31 @@ trade:
 
 - [ ] 增加 local/remote adapter 切换机制。
 - [x] 基于 `(sourceSystem, payloadSha256)` 增加 putIfAbsent 幂等和分片内唯一约束。
-- [ ] 增加 receiver Outbox 及 pipeline 重试机制。
+- [ ] 增加 ingress Outbox 及 pipeline 重试机制。
 - [ ] 设计 storage-service API，但初期不启动第三个 Boot。
 - [ ] 增加只读账号和最小权限配置。
 
 ## 七、验收标准
 
-- receiver 写入 storage 时，相同 SHA-256 的 metadata/blob 路由到相同 `_00 ~ _99` 后缀，并在同一事务中提交。
-- pipeline 能通过 `StorageReader` 按 `(storageId, storageSha256)` 读取 receiver 写入的数据，业务代码不知道物理表名。
+- ingress 写入 storage 时，相同 SHA-256 的 metadata/blob 路由到相同 `_00 ~ _99` 后缀，并在同一事务中提交。
+- pipeline 能通过 `StorageReader` 按 `(storageId, storageSha256)` 读取 ingress 写入的数据，业务代码不知道物理表名。
 - pipeline 的时间分表规则和 storage 的 SHA-256 分表规则相互独立。
-- receiver 启动时不需要 pipeline 规则；pipeline 可以同时装配 pipeline 主数据源和 storage 只读数据源。
+- ingress 启动时不需要 pipeline 规则；pipeline 可以同时装配 pipeline 主数据源和 storage 只读数据源。
 - 任一不需要 storage 的模块不会因为引入 common 或 ShardingSphere 而自动加载 storage Mapper、Service 或规则。
 - `sql-show` 可通过配置控制；MyBatis 可关闭冗余 `StdOutImpl` 日志，只保留需要的 ShardingSphere 实际 SQL。
-- 把 storage 数据库连接迁移到另一台 MySQL Server 时，只修改配置和部署，不修改 receiver/pipeline 业务逻辑。
-- 将 local adapter 替换为 remote client 时，receiver/pipeline 仍只依赖原有 StorageWriter/StorageReader。
+- 把 storage 数据库连接迁移到另一台 MySQL Server 时，只修改配置和部署，不修改 ingress/pipeline 业务逻辑。
+- 将 local adapter 替换为 remote client 时，ingress/pipeline 仍只依赖原有 StorageWriter/StorageReader。
 
 ## 八、下次开始工作时的检查清单
 
 1. 阅读根目录 `AGENTS.md` 和本文件。
 2. 执行 `git status --short`、`git diff`，保护用户未提交改动。
-3. 检查 receiver、pipeline 当时实际 datasource/schema 配置，确认 storage schema 的最终选择。
+3. 检查 ingress、pipeline 当时实际 datasource/schema 配置，确认 storage schema 的最终选择。
 4. 检查是否已有父聚合 POM；当前各模块是独立 Maven 工程，新增 artifact 前需决定是否增加聚合构建。
 5. 先完成阶段 A，再做数据源/分表基础设施调整，避免一次同时改变业务 API、依赖结构和数据库拓扑。
 6. 每次变更后至少验证：
    - `trade-common`/新增 storage 模块测试。
-   - receiver clean test 和启动上下文。
+   - ingress clean test 和启动上下文。
    - pipeline clean test 和启动上下文。
    - storage ID 精确路由测试。
    - pipeline 时间范围路由测试（规则确定后）。

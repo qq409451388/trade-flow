@@ -2,6 +2,8 @@
 
 ## 项目通用规范
 1. 接口业务逻辑中需要使用异常的场景，建议使用BusinessException，以返回标准数据格式
+2. 本项目还未上线，如果遇到原始设计问题，可以主动抛出讨论确认合适的方式重构，不关注老逻辑兼容。
+3. 项目尚未上线，所以sql要以最终版本为前提创建。每次渐进性改表，只需要改代码时同步更改完即可。
 
 ## 架构与模块边界
 1. 业务模块访问 Storage 只能依赖 `trade-storage-api` 的 `StorageWriter`、`StorageReader` 和 DTO，禁止直接依赖 Storage DO、Mapper、DB Service 或物理分表名。
