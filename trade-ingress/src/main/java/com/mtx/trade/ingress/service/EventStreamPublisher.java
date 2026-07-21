@@ -69,6 +69,6 @@ public class EventStreamPublisher {
 
         stringRedisTemplate.opsForStream().add(paymentEventStreamKey, fields);
         log.info("payment event published, stream={}, eventId={}, storageId={}",
-                orderEventStreamKey, eventDO.getId(), eventDO.getRawId());
+                paymentEventStreamKey, eventDO.getId(), eventDO.getRawId());
     }
 }
