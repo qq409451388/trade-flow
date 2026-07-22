@@ -18,7 +18,7 @@ public interface OrderEventProcessLogService {
     int STATUS_APPLIED = 1;
     /** 事件因幂等、旧版本等原因被安全忽略，业务数据无需变更。 */
     int STATUS_IGNORED = 2;
-    /** 事件处理失败，Ingress 不应被 ACK。 */
+    /** 事件处理失败；是否 ACK 由主动拉取重试次数及终态策略决定。 */
     int STATUS_FAILED = 3;
 
     /** 投递确认动作尚未执行或结果尚未记录。 */
@@ -50,4 +50,7 @@ public interface OrderEventProcessLogService {
     void recordIngressAck(long processLogId, boolean succeeded);
 
     void recordRedisXack(long processLogId, boolean succeeded);
+
+    /** 查询指定事件已经发生的主动拉取失败次数，包含刚落库的本次失败。 */
+    long countActivePullFailures(long eventId);
 }

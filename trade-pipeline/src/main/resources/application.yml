@@ -49,6 +49,7 @@ trade:
       consumer-name: ${PIPELINE_ORDER_CONSUMER_NAME:pipeline-order-1}
       batch-size: 100
       block-timeout: 2s
+      listener-watchdog-delay: 5000
       reclaim-delay: 30000
       pending-min-idle: 1m
       ingress-ack-url: ${INGRESS_ACK_URL:http://127.0.0.1:8115/trade-ingress/event/ack}
@@ -62,6 +63,7 @@ trade:
       consumer-name: ${PIPELINE_PAYMENT_CONSUMER_NAME:pipeline-payment-1}
       batch-size: 100
       block-timeout: 2s
+      listener-watchdog-delay: 5000
       reclaim-delay: 30000
       pending-min-idle: 1m
     exhausted-event-pull:
@@ -71,6 +73,7 @@ trade:
       batch-size: 500
       max-batches-per-run: 100
       parallelism: 4
+      terminal-failure-attempts: 3
       max-run-duration: 10m
       lease-duration: 15m
     fuiou-order:

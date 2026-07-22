@@ -1,6 +1,7 @@
 package com.mtx.trade.pipeline.service;
 
 import com.mtx.trade.common.enums.ContentType;
+import com.mtx.trade.common.utils.EnterpriseWechatRobotUtils;
 import com.mtx.trade.pipeline.config.ExhaustedEventPullProperties;
 import com.mtx.trade.pipeline.dto.OrderEventPullResult;
 import com.mtx.trade.pipeline.task.ExhaustedEventPullScheduler;
@@ -26,6 +27,8 @@ class ExhaustedEventPullSchedulerTest {
     private OrderEventPullService orderEventPullService;
     @Mock
     private PaymentEventPullService paymentEventPullService;
+    @Mock
+    private EnterpriseWechatRobotUtils enterpriseWechatRobotUtils;
 
     private ExhaustedEventPullScheduler scheduler;
 
@@ -34,7 +37,8 @@ class ExhaustedEventPullSchedulerTest {
         ExhaustedEventPullProperties properties = new ExhaustedEventPullProperties();
         properties.setBatchSize(100);
         scheduler = new ExhaustedEventPullScheduler(
-                properties, leaseService, orderEventPullService, paymentEventPullService);
+                properties, leaseService, orderEventPullService, paymentEventPullService,
+                enterpriseWechatRobotUtils);
     }
 
     @Test

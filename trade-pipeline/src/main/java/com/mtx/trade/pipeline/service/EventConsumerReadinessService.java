@@ -24,18 +24,21 @@ public class EventConsumerReadinessService {
     private final StringRedisTemplate redisTemplate;
     private final ObjectProvider<OrderEventStreamConsumer> orderConsumerProvider;
     private final ObjectProvider<PaymentEventStreamConsumer> paymentConsumerProvider;
+    private final EventStreamListenerRegistry listenerRegistry;
 
     public EventConsumerReadinessService(
             @Qualifier("pipelineActualDataSource") DataSource pipelineDataSource,
             @Qualifier("storageActualDataSource") DataSource storageDataSource,
             StringRedisTemplate redisTemplate,
             ObjectProvider<OrderEventStreamConsumer> orderConsumerProvider,
-            ObjectProvider<PaymentEventStreamConsumer> paymentConsumerProvider) {
+            ObjectProvider<PaymentEventStreamConsumer> paymentConsumerProvider,
+            EventStreamListenerRegistry listenerRegistry) {
         this.pipelineDataSource = pipelineDataSource;
         this.storageDataSource = storageDataSource;
         this.redisTemplate = redisTemplate;
         this.orderConsumerProvider = orderConsumerProvider;
         this.paymentConsumerProvider = paymentConsumerProvider;
+        this.listenerRegistry = listenerRegistry;
     }
 
     public EventConsumerReadinessVO check(Integer contentType) {
@@ -49,9 +52,11 @@ public class EventConsumerReadinessService {
         if (order) {
             OrderEventStreamConsumer consumer = orderConsumerProvider.getIfAvailable();
             checks.put("orderConsumerGroup", consumer != null && consumer.isReady());
+            checks.put("orderStreamSubscription", listenerRegistry.isReady(ContentType.ORDER.getCode()));
         } else if (payment) {
             PaymentEventStreamConsumer consumer = paymentConsumerProvider.getIfAvailable();
             checks.put("paymentConsumerGroup", consumer != null && consumer.isReady());
+            checks.put("paymentStreamSubscription", listenerRegistry.isReady(ContentType.PAYMENT.getCode()));
         }
         return new EventConsumerReadinessVO(checks.values().stream().allMatch(Boolean.TRUE::equals), checks);
     }

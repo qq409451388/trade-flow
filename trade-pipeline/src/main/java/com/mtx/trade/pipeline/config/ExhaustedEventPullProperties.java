@@ -16,6 +16,7 @@ public class ExhaustedEventPullProperties {
     private int batchSize = 500;
     private int maxBatchesPerRun = 100;
     private int parallelism = 4;
+    private int terminalFailureAttempts = 3;
     private Duration maxRunDuration = Duration.ofMinutes(10);
     private Duration leaseDuration = Duration.ofMinutes(15);
 }

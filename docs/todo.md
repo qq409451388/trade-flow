@@ -298,3 +298,167 @@ trade:
    - pipeline clean test 和启动上下文。
    - storage ID 精确路由测试。
    - pipeline 时间范围路由测试（规则确定后）。
+
+## 九、可靠投递后续改造：高优先级探针与 Ingress ACK Outbox（2026-07-22）
+
+> 状态：待实施。开始前先阅读 `docs/project-overview.md`、`docs/design/event-version-design.md` 和
+> `docs/design/pipeline-design.md`。本节记录的是实际压测和故障恢复过程中发现的问题，不能只按任务标题机械修改。
+
+### 9.1 问题上下文一：HALF_OPEN 探针被普通 Stream 积压阻塞
+
+压测期间使用 `REPLAY_RPS=100` 回放订单数据。Pipeline 实时 Stream Listener 曾因
+`StreamMessageListenerContainer` 未显式启动而停止消费，修复并重启后 Redis 中已经形成大量普通消息积压。
+
+2026-07-22 现场只读检查结果：
+
+- 订单熔断状态为 `HALF_OPEN`，`probe_event_id=135849`。
+- `trade_order_event.id=135849` 仍为 `acked=0`，并且是当时最早的未 ACK 订单事件。
+- 订单未 ACK 共约 3.4 万条。
+- Redis `stream:order-event` 消费组正在工作，但仍有约 19.6 万条 `lag`。
+- 探针通过 `XADD` 追加到了普通订单 Stream 尾部，必须等待前面的普通积压全部消费后才能获得 ACK。
+- 该探针 `auto_redelivery_count=0`，不满足耗尽事件主动拉取条件，因此
+  `ExhaustedEventPullScheduler` 也不会提前处理它。
+
+当前状态机会因此形成恢复阻塞：
+
+```text
+普通 Stream 有大量积压
+  -> HALF_OPEN 探针排在积压尾部
+  -> 探针长时间无法 ACK
+  -> 熔断无法 CLOSED
+  -> Ingress 数据库积压恢复不能开始
+```
+
+当前 `waitForProbeAck` 只安排下一次检查，没有明确探针截止时间；如果探针一直没有 ACK，通道可能长期停留在
+`HALF_OPEN`。不能通过放宽检查或直接跳过 ACK 来掩盖该问题。
+
+### 9.2 问题上下文二：Ingress ACK 失败导致完整业务重复执行
+
+Pipeline 当前顺序为：
+
+```text
+业务落库 -> 处理审计 -> HTTP ACK Ingress -> Redis XACK
+```
+
+当 Pipeline 正在消费，而 Ingress 重启或短暂不可达时，HTTP ACK 会出现 `Connection refused`。此时：
+
+- Pipeline 业务数据已经提交成功。
+- 处理日志记录 Ingress ACK 失败。
+- 当前 Redis 消息不执行 XACK，保留在 PEL。
+- PEL 恢复任务随后重新执行完整业务 Handler，再依靠业务幂等避免重复写入。
+- Ingress 仍保留 `acked=0`，恢复后还可能再次向 Stream 发布同一个 event。
+
+该策略不会丢数据，但短暂故障会放大为 PEL、重复业务读取、重复审计和重复 Stream 消息。以每秒100条、Ingress
+不可用1分钟估算，可能产生约6000条待收尾消息；当前 PEL 每批100条、每30秒扫描一次，单靠 PEL 收尾恢复较慢。
+
+此外，本机开发环境曾配置 HTTP/SOCKS 代理，内部 ACK 请求被代理返回 `502/application/octet-stream`。目前内部
+Ingress/Pipeline RestClient 已显式配置 `Proxy.NO_PROXY`；该修复只能解决代理误路由，不能解决 Ingress 真正重启时的
+`Connection refused`，后者必须通过持久化 ACK Outbox 处理。
+
+### 9.3 已确认的目标与不变量
+
+- MySQL 继续作为事件和恢复任务事实源；Redis Stream 只承担通知、削峰和至少一次投递。
+- Pipeline 业务成功或幂等忽略后，必须先形成持久化的 Ingress ACK 任务，才允许 Redis XACK。
+- Ingress ACK 失败不得再依赖重新执行完整订单/支付业务来收尾。
+- 业务失败不能创建成功 ACK 任务，仍按现有失败审计、自动补发和主动拉取策略处理。
+- ACK 和 Redis XACK 都是幂等动作；任意进程崩溃点都允许安全重试。
+- PEL 只承担业务处理中断、审计未可靠落库或 Redis XACK 失败恢复，不承担长期 HTTP ACK 重试。
+- HALF_OPEN 必须验证 Redis 到 Pipeline 的实际处理能力，且探针不能排在普通积压之后。
+- 订单、支付必须按通道隔离探针和线程，不能因一个通道积压阻塞另一个通道。
+- 多实例领取 ACK 任务、发布探针和恢复积压必须使用 MySQL CAS/租约，禁止仅依赖进程内锁。
+
+### 9.4 阶段一：实现 Pipeline Ingress ACK Outbox
+
+- [ ] 在 Pipeline 最终基础结构和 `docs/sql/trade-pipeline-2026-07-22.sql` 中新增统一 ACK 任务表，暂定名
+  `pipeline_ingress_ack_task`。
+- [ ] 使用 `(content_type, event_id)` 唯一键，至少包含：`status`、`retry_count`、`next_retry_time`、
+  `lease_owner`、`lease_until`、`last_error`、`process_log_id`、创建/更新时间。
+- [ ] 同步新增 DO、Mapper、`IngressAckTaskDbService`、`IngressAckTaskDbServiceImpl`，遵循项目
+  MyBatis-Plus DB Service 规范。
+- [ ] 订单/支付业务事务成功或幂等忽略时，在同一个 `pipelineTransactionManager` 事务中 upsert ACK 任务。
+- [ ] 业务提交后保留一次低延迟 ACK 快速尝试；成功则将任务标记完成，失败则保留任务等待后台重试。
+- [ ] ACK 任务和处理审计可靠落库后，即使 HTTP ACK 失败也执行 Redis XACK；不得因此把完整业务留在 PEL 重跑。
+- [ ] ACK 任务落库失败时不得 XACK；由 PEL 重放确保不会出现“业务成功但没有任何 ACK 恢复事实”的窗口。
+- [ ] ACK 成功但任务状态更新失败时继续重试，依赖 Ingress ACK 幂等收敛。
+- [ ] Redis XACK 失败时允许 PEL 重放；业务幂等和 ACK 任务唯一键必须保证无副作用。
+
+建议 ACK 任务状态：
+
+```text
+PENDING -> PROCESSING -> SUCCEEDED
+              |              ^
+              +--失败/租约过期-+
+```
+
+`PROCESSING` 只能通过带租约的 CAS 领取。失败后回到可重试状态并更新 `next_retry_time`，不要设置自动放弃终态；
+Ingress ACK 是必须最终完成的交接动作，达到告警阈值后仍要继续重试。
+
+### 9.5 阶段二：实现独立 ACK 重试任务
+
+- [ ] 所有 `@Scheduled` 入口放入 `trade-pipeline/.../task` 包，Service 只提供批量领取与执行方法。
+- [ ] ACK 任务使用独立 Scheduler 和有界工作线程，订单、支付共享受控并发，避免打满 Pipeline 数据库连接池。
+- [ ] 默认每批500条，按 `next_retry_time + id` 索引和游标查询，禁止逐 event 小查询扫描。
+- [ ] 建议退避间隔：1秒、5秒、15秒、30秒、1分钟，之后固定每分钟；参数可配置。
+- [ ] 每批续租；实例崩溃后其他实例可接管过期任务。
+- [ ] ACK 成功后更新任务状态，并明确处理对应 process log 的 `ingress_ack_status` 最终语义。
+- [ ] 连续失败达到阈值后使用 `EnterpriseWechatRobotUtils` 按批汇总告警，禁止逐事件刷屏；告警后仍继续重试。
+- [ ] 增加积压数量、最老任务年龄、成功/失败速率和租约接管日志。
+
+### 9.6 阶段三：独立高优先级 Probe Stream
+
+推荐保留 Redis 端到端探测能力，不采用只验证 HTTP 的 Pipeline 专用处理接口。新增：
+
+```text
+stream:order-event-probe
+stream:payment-event-probe
+```
+
+- [ ] Ingress 的 HALF_OPEN 只向对应 Probe Stream 发布一条真实未 ACK event，不再追加到普通 Stream 尾部。
+- [ ] 探针消息继续携带完整 `eventId + contentType + storageId + payloadSha256 + eventKey + messageVersion`。
+- [ ] Pipeline 为订单、支付 Probe Stream 分别配置独立 Consumer Group、ListenerContainer 和执行器。
+- [ ] Probe Listener 复用现有订单/支付 Handler 和 ACK Outbox，不复制业务落库逻辑。
+- [ ] 处理审计新增 `TRIGGER_CIRCUIT_PROBE = 4`，清晰区分普通 Stream、PEL、主动拉取和熔断探针。
+- [ ] Probe Redis 消息仍手动 XACK；业务成功后先形成 ACK Outbox，再完成 Probe XACK。
+- [ ] 普通 Stream 中迟到的同一事件仍按版本幂等忽略，并正常完成 ACK/XACK。
+
+### 9.7 阶段四：修正 HALF_OPEN 状态机
+
+- [ ] 在 `trade_event_delivery_control` 最终结构和当日 Ingress SQL 中增加 `probe_sent_time`、
+  `probe_deadline`、`probe_attempt_count`（名称可在实现时统一）。
+- [ ] `OPEN -> HALF_OPEN` 后发布探针并原子记录 event ID、发送时间、截止时间和状态版本。
+- [ ] 探针发布失败立即回到 OPEN。
+- [ ] 探针在截止时间内 ACK，且 `contentType + probeEventId + HALF_OPEN状态版本` 均匹配时，才能 CLOSED。
+- [ ] 探针超时（建议默认30秒）必须回到 OPEN，下一轮健康检查重新探测，禁止无限等待。
+- [ ] 迟到 ACK 仍按普通幂等 ACK 接受，但不得关闭已经进入下一轮的熔断状态。
+- [ ] 探针成功关闭熔断后，再记录当时最大未 ACK event ID为恢复 cutoff，并按既有游标批量恢复普通积压。
+
+### 9.8 阶段五：强化 readiness，消除“假绿”
+
+当前已补充 `StreamMessageListenerContainer` 显式启动、订阅句柄检查和5秒 Watchdog。后续继续增加：
+
+- [ ] readiness 检查业务库、Storage、Redis、普通 Consumer Group、普通 Subscription 和 Probe Subscription。
+- [ ] 普通 Stream `lag=0` 时，Subscription active 可视为正常。
+- [ ] `lag>0` 时必须验证最近消费时间或游标进度在配置窗口内推进，不能只看线程存在。
+- [ ] Listener 每次收到记录时更新内存心跳；Watchdog 检测订阅退出后重新注册。
+- [ ] Ingress 必须读取 `ResponseData.data.ready`，外层 `ResponseData.success` 只表示检查接口执行成功。
+
+### 9.9 故障与并发验收场景
+
+- [ ] 普通订单 Stream 存在20万条 lag 时，订单探针仍能在目标时间（建议5秒内）被 Pipeline 接管并 ACK。
+- [ ] 支付积压不得影响订单探针，订单积压不得影响支付探针。
+- [ ] Ingress 停止1分钟期间，Pipeline 业务继续落库，Redis PEL 不因 HTTP ACK 失败线性增长，ACK Outbox 正常积压。
+- [ ] Ingress 恢复后 ACK Outbox 自动排空，订单/支付业务记录不重复、不回滚、不被旧版本覆盖。
+- [ ] Pipeline 在“业务提交后、Outbox提交前”“Outbox提交后、XACK前”“ACK成功后、任务更新前”分别崩溃，重启后均可收敛。
+- [ ] Redis Probe Stream 发布失败时熔断回 OPEN；探针超时不得长期停留 HALF_OPEN。
+- [ ] 两个 Ingress/Pipeline 实例并发运行时，同一探针只有一个有效发布者，同一 ACK 任务同一时刻只有一个租约持有者。
+- [ ] ACK 重试失败、租约过期、企微告警失败均有符合项目规范的英文结构化日志，并说明下一步恢复状态。
+
+### 9.10 完成后的目标链路
+
+```text
+普通事件             -> 普通 Stream -> Pipeline 业务事务 + ACK Outbox -> Redis XACK
+Ingress ACK失败       -> ACK Outbox 后台重试，不重跑完整业务
+HALF_OPEN探针         -> 独立高优先级 Probe Stream -> 同一业务 Handler + ACK Outbox
+普通 Stream巨大积压  -> 不影响探针完成和熔断关闭
+PEL                   -> 只恢复处理中断、审计/Outbox未落库或Redis XACK失败
+```

@@ -52,7 +52,7 @@ public class EventDeliveryRecoveryService {
             circuitBreaker.recordClosedPipelineReady(contentType);
         } catch (Exception e) {
             circuitBreaker.recordClosedPipelineFailure(contentType, e);
-            log.warn("[Circuit Breaker] 🔄 Pipeline readiness check failed; waiting before the next check. "
+            log.warn("[Circuit Breaker] ❌ Pipeline readiness check failed; waiting before the next check. "
                             + "contentType={}, reason={}",
                     contentType, e.getMessage());
         }
@@ -75,7 +75,7 @@ public class EventDeliveryRecoveryService {
             }
         } catch (Exception e) {
             circuitBreaker.recordHealthFailure(contentType, e);
-            log.warn("[Circuit Breaker] 🔄 Recovery check is still failing; circuit remains OPEN. "
+            log.warn("[Circuit Breaker] ❌ Recovery check is still failing; circuit remains OPEN. "
                             + "contentType={}, reason={}",
                     contentType, e.getMessage());
         }

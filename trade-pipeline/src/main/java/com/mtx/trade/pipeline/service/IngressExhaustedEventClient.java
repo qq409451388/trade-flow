@@ -10,6 +10,8 @@ import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
+
+import java.net.Proxy;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.util.Collections;
@@ -30,6 +32,8 @@ public class IngressExhaustedEventClient {
             RestClient.Builder restClientBuilder,
             OrderEventConsumerProperties properties) {
         SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+        // Ingress 是内部服务，禁止内部调用误入宿主机代理。
+        requestFactory.setProxy(Proxy.NO_PROXY);
         requestFactory.setConnectTimeout(properties.getIngressAckConnectTimeout());
         requestFactory.setReadTimeout(properties.getIngressAckReadTimeout());
         this.restClient = restClientBuilder.requestFactory(requestFactory).build();

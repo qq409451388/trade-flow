@@ -96,6 +96,8 @@ Pipeline 业务事务显式使用 `pipelineTransactionManager`，不得将 Pipel
 - Pipeline 默认每分钟按订单、支付通道各启动一次耗尽积压排空；按 event ID 游标连续拉取，每批500条，
   单轮最多100批或10分钟，批内共享4线程有界执行器。MySQL租约按批续期以避免多实例重复执行；失败 event
   不阻塞同一轮的后续 event，作为Redis Stream记录被误删后的最终自动恢复路径。
+- 主动拉取连续失败默认最多3次。前两次保持Ingress未ACK；第三次在失败审计可靠落库后ACK Ingress，形成
+  `process_status=FAILED + ingress_ack_status=SUCCEEDED` 的人工处理终态，并按批汇总发送企业微信告警。
 - Pipeline提供 `/readiness/event-consumer`，按内容类型检查Pipeline数据库、Storage数据源、Redis和consumer group，
 供Ingress熔断恢复使用。
 

@@ -1,5 +1,9 @@
 package com.mtx.trade.pipeline.config;
 
+import com.mtx.trade.common.utils.EnterpriseWechatRobotUtils;
+import com.mtx.trade.common.utils.SpringUtils;
+import com.mtx.trade.common.enums.ContentType;
+import com.mtx.trade.pipeline.service.EventStreamListenerRegistry;
 import com.mtx.trade.pipeline.service.OrderEventStreamConsumer;
 import com.mtx.trade.pipeline.service.PaymentEventStreamConsumer;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -8,6 +12,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.task.TaskExecutor;
+import org.springframework.core.env.Environment;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.connection.stream.Consumer;
 import org.springframework.data.redis.connection.stream.MapRecord;
@@ -15,6 +20,7 @@ import org.springframework.data.redis.connection.stream.ReadOffset;
 import org.springframework.data.redis.connection.stream.StreamOffset;
 import org.springframework.data.redis.serializer.RedisSerializer;
 import org.springframework.data.redis.stream.StreamMessageListenerContainer;
+import org.springframework.data.redis.stream.Subscription;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 
@@ -31,6 +37,7 @@ public class EventConsumerConfiguration {
 
     public static final String ORDER_STREAM_EXECUTOR = "orderStreamListenerExecutor";
     public static final String PAYMENT_STREAM_EXECUTOR = "paymentStreamListenerExecutor";
+    public static final String STREAM_WATCHDOG_SCHEDULER = "streamWatchdogTaskScheduler";
     public static final String ORDER_PEL_SCHEDULER = "orderPelTaskScheduler";
     public static final String PAYMENT_PEL_SCHEDULER = "paymentPelTaskScheduler";
     public static final String EXHAUSTED_PULL_SCHEDULER = "exhaustedPullTaskScheduler";
@@ -50,48 +57,59 @@ public class EventConsumerConfiguration {
         return streamExecutor("pipeline-payment-stream-");
     }
 
-    @Bean
+    @Bean(initMethod = "start", destroyMethod = "stop")
     @ConditionalOnProperty(prefix = "trade.pipeline.order-event-consumer",
             name = "enabled", havingValue = "true", matchIfMissing = true)
     public StreamMessageListenerContainer<String, MapRecord<String, String, String>> orderStreamListenerContainer(
             RedisConnectionFactory connectionFactory,
             OrderEventConsumerProperties properties,
             OrderEventStreamConsumer consumer,
+            EventStreamListenerRegistry listenerRegistry,
             @Qualifier(ORDER_STREAM_EXECUTOR) TaskExecutor executor) {
         StreamMessageListenerContainer<String, MapRecord<String, String, String>> container =
                 createContainer(connectionFactory, properties.getBlockTimeout(), properties.getBatchSize(),
                         executor, consumer::handleStreamReadError);
-        container.register(StreamMessageListenerContainer.StreamReadRequest
+        var request = StreamMessageListenerContainer.StreamReadRequest
                         .builder(StreamOffset.create(properties.getStreamKey(), ReadOffset.lastConsumed()))
                         .consumer(Consumer.from(properties.getGroup(), properties.getConsumerName()))
                         .autoAcknowledge(false)
                         .errorHandler(consumer::handleStreamReadError)
                         .cancelOnError(error -> false)
-                        .build(),
-                consumer::consumeNewMessage);
+                        .build();
+        Subscription subscription = container.register(request, consumer::consumeNewMessage);
+        listenerRegistry.bind(ContentType.ORDER.getCode(), "order", container, subscription,
+                () -> container.register(request, consumer::consumeNewMessage));
         return container;
     }
 
-    @Bean
+    @Bean(initMethod = "start", destroyMethod = "stop")
     @ConditionalOnProperty(prefix = "trade.pipeline.payment-event-consumer",
             name = "enabled", havingValue = "true", matchIfMissing = true)
     public StreamMessageListenerContainer<String, MapRecord<String, String, String>> paymentStreamListenerContainer(
             RedisConnectionFactory connectionFactory,
             PaymentEventConsumerProperties properties,
             PaymentEventStreamConsumer consumer,
+            EventStreamListenerRegistry listenerRegistry,
             @Qualifier(PAYMENT_STREAM_EXECUTOR) TaskExecutor executor) {
         StreamMessageListenerContainer<String, MapRecord<String, String, String>> container =
                 createContainer(connectionFactory, properties.getBlockTimeout(), properties.getBatchSize(),
                         executor, consumer::handleStreamReadError);
-        container.register(StreamMessageListenerContainer.StreamReadRequest
+        var request = StreamMessageListenerContainer.StreamReadRequest
                         .builder(StreamOffset.create(properties.getStreamKey(), ReadOffset.lastConsumed()))
                         .consumer(Consumer.from(properties.getGroup(), properties.getConsumerName()))
                         .autoAcknowledge(false)
                         .errorHandler(consumer::handleStreamReadError)
                         .cancelOnError(error -> false)
-                        .build(),
-                consumer::consumeNewMessage);
+                        .build();
+        Subscription subscription = container.register(request, consumer::consumeNewMessage);
+        listenerRegistry.bind(ContentType.PAYMENT.getCode(), "payment", container, subscription,
+                () -> container.register(request, consumer::consumeNewMessage));
         return container;
+    }
+
+    @Bean(name = STREAM_WATCHDOG_SCHEDULER)
+    public ThreadPoolTaskScheduler streamWatchdogTaskScheduler() {
+        return scheduler(2, "pipeline-stream-watchdog-");
     }
 
     @Bean(name = ORDER_PEL_SCHEDULER)
@@ -124,6 +142,11 @@ public class EventConsumerConfiguration {
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(30);
         return executor;
+    }
+
+    @Bean
+    public EnterpriseWechatRobotUtils enterpriseWechatRobotUtils(Environment environment) {
+        return new EnterpriseWechatRobotUtils(new SpringUtils(environment));
     }
 
     private static StreamMessageListenerContainer<String, MapRecord<String, String, String>> createContainer(

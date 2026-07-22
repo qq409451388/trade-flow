@@ -8,11 +8,13 @@ import com.mtx.trade.storage.api.StorageKey;
 import com.mtx.trade.storage.api.StorageMetadata;
 import com.mtx.trade.storage.api.StorageReader;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.Arrays;
 
 /** 单个订单事件处理入口；Storage 读取和 Pipeline 写事务保持分离。 */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class OrderEventHandler {
@@ -51,8 +53,10 @@ public class OrderEventHandler {
                 return orderPersistService.persist(aggregate);
             }
         } catch (OrderEventProcessingException e) {
+            log.error("handle order processing ex:{}", e.getMessage(), e);
             throw e;
         } catch (RuntimeException e) {
+            log.error("handle order runtime ex:{}", e.getMessage(), e);
             throw new OrderEventProcessingException(stage, e);
         }
     }

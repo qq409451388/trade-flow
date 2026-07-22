@@ -1,5 +1,6 @@
 package com.mtx.trade.pipeline.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.mtx.trade.common.enums.ErrorCode;
 import com.mtx.trade.common.exception.BusinessException;
 import com.mtx.trade.pipeline.dto.PaymentEventMessage;
@@ -80,6 +81,14 @@ public class PaymentEventProcessLogServiceImpl implements PaymentEventProcessLog
         entity.setId(processLogId);
         entity.setRedisXackStatus(succeeded ? DELIVERY_SUCCEEDED : DELIVERY_FAILED);
         updateOrThrow(entity, "Redis XACK");
+    }
+
+    @Override
+    public long countActivePullFailures(long eventId) {
+        return processLogDbService.count(new LambdaQueryWrapper<PaymentEventProcessLogDO>()
+                .eq(PaymentEventProcessLogDO::getEventId, eventId)
+                .eq(PaymentEventProcessLogDO::getTriggerType, TRIGGER_ACTIVE_PULL)
+                .eq(PaymentEventProcessLogDO::getProcessStatus, STATUS_FAILED));
     }
 
     private PaymentEventProcessLogDO base(

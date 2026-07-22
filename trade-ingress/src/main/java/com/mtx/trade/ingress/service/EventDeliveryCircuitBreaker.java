@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.mtx.trade.common.enums.ContentType;
 import com.mtx.trade.common.enums.ErrorCode;
 import com.mtx.trade.common.exception.BusinessException;
+import com.mtx.trade.common.utils.EnterpriseWechatRobotUtils;
 import com.mtx.trade.ingress.common.enums.DeliveryCircuitStatus;
 import com.mtx.trade.ingress.config.EventDeliveryCircuitProperties;
 import com.mtx.trade.ingress.entity.EventDeliveryControlDO;

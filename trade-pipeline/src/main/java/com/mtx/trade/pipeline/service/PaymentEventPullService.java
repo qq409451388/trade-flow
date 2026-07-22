@@ -4,6 +4,7 @@ import com.mtx.trade.common.enums.ContentType;
 import com.mtx.trade.common.enums.ErrorCode;
 import com.mtx.trade.common.exception.BusinessException;
 import com.mtx.trade.pipeline.config.EventConsumerConfiguration;
+import com.mtx.trade.pipeline.config.ExhaustedEventPullProperties;
 import com.mtx.trade.pipeline.dto.IngressExhaustedEvent;
 import com.mtx.trade.pipeline.dto.PaymentEventMessage;
 import com.mtx.trade.pipeline.dto.PaymentEventPullCommand;
@@ -29,6 +30,7 @@ public class PaymentEventPullService {
     private final PaymentEventHandler paymentEventHandler;
     private final PaymentEventProcessLogService processLogService;
     private final IngressEventAckClient ingressEventAckClient;
+    private final ExhaustedEventPullProperties exhaustedPullProperties;
     private final Executor exhaustedPullWorkerExecutor;
 
     public PaymentEventPullService(
@@ -36,12 +38,14 @@ public class PaymentEventPullService {
             PaymentEventHandler paymentEventHandler,
             PaymentEventProcessLogService processLogService,
             IngressEventAckClient ingressEventAckClient,
+            ExhaustedEventPullProperties exhaustedPullProperties,
             @Qualifier(EventConsumerConfiguration.EXHAUSTED_PULL_WORKER_EXECUTOR)
             Executor exhaustedPullWorkerExecutor) {
         this.exhaustedEventClient = exhaustedEventClient;
         this.paymentEventHandler = paymentEventHandler;
         this.processLogService = processLogService;
         this.ingressEventAckClient = ingressEventAckClient;
+        this.exhaustedPullProperties = exhaustedPullProperties;
         this.exhaustedPullWorkerExecutor = exhaustedPullWorkerExecutor;
     }
 
@@ -80,16 +84,36 @@ public class PaymentEventPullService {
         } catch (Exception e) {
             String stage = e instanceof PaymentEventProcessingException processingException
                     ? processingException.getStage() : PaymentEventProcessStage.PAYMENT_PERSIST;
+            long failureLogId;
             try {
-                processLogService.recordFailure(event, null, PaymentEventProcessLogService.TRIGGER_ACTIVE_PULL,
+                failureLogId = processLogService.recordFailure(
+                        event, null, PaymentEventProcessLogService.TRIGGER_ACTIVE_PULL,
                         stage, e, startedTime, startedNanos);
             } catch (Exception logFailure) {
                 e.addSuppressed(logFailure);
+                log.error("[Processing Audit] ❌ Pulled payment failure could not be recorded; Ingress remains "
+                                + "unacknowledged. eventId={}, stage={}",
+                        event.eventId(), stage, e);
+                return new PaymentEventPullResult(event.eventId(), "AUDIT_FAILED", e.getMessage());
             }
-            log.error("[Exhausted Event Pull] ❌ Pulled payment event processing failed; Ingress remains "
-                            + "unacknowledged. eventId={}, stage={}",
-                    event.eventId(), stage, e);
-            return new PaymentEventPullResult(event.eventId(), "FAILED", e.getMessage());
+            long attempts;
+            try {
+                attempts = processLogService.countActivePullFailures(event.eventId());
+            } catch (Exception countFailure) {
+                log.error("[Processing Audit] ❌ Active-pull failure count could not be read; Ingress remains "
+                                + "unacknowledged. eventId={}",
+                        event.eventId(), countFailure);
+                return new PaymentEventPullResult(event.eventId(), "AUDIT_COUNT_FAILED", e.getMessage());
+            }
+            if (attempts < terminalFailureAttempts()) {
+                log.warn("[Exhausted Event Pull] 🔄 Pulled payment processing failed; Ingress remains "
+                                + "unacknowledged for another active-pull attempt. eventId={}, stage={}, "
+                                + "attempts={}, terminalAttempts={}",
+                        event.eventId(), stage, attempts, terminalFailureAttempts(), e);
+                return new PaymentEventPullResult(event.eventId(), "RETRYABLE_FAILED",
+                        failureMessage(stage, attempts, e));
+            }
+            return acknowledgeTerminalFailure(event, failureLogId, stage, attempts, e);
         }
         try {
             ingressEventAckClient.ack(event.contentType(), event.eventId());
@@ -112,6 +136,51 @@ public class PaymentEventPullService {
             return new PaymentEventPullResult(event.eventId(), "ACK_AUDIT_FAILED", e.getMessage());
         }
         return new PaymentEventPullResult(event.eventId(), result.name(), "processed");
+    }
+
+    private PaymentEventPullResult acknowledgeTerminalFailure(
+            PaymentEventMessage event, long processLogId, String stage, long attempts, Exception failure) {
+        try {
+            ingressEventAckClient.ack(event.contentType(), event.eventId());
+        } catch (Exception ackFailure) {
+            try {
+                processLogService.recordIngressAck(processLogId, false);
+            } catch (Exception auditFailure) {
+                ackFailure.addSuppressed(auditFailure);
+            }
+            log.error("[Ingress ACK] ❌ Terminal payment failure was audited but Ingress ACK failed; the event "
+                            + "remains retryable. eventId={}, stage={}, attempts={}",
+                    event.eventId(), stage, attempts, ackFailure);
+            return new PaymentEventPullResult(event.eventId(), "ACK_FAILED",
+                    failureMessage(stage, attempts, failure));
+        }
+        try {
+            processLogService.recordIngressAck(processLogId, true);
+        } catch (Exception auditFailure) {
+            log.error("[Processing Audit] ❌ Terminal payment failure was ACKed but the audit ACK status update "
+                            + "failed. eventId={}, processLogId={}",
+                    event.eventId(), processLogId, auditFailure);
+            return new PaymentEventPullResult(event.eventId(), "TERMINAL_ACK_AUDIT_FAILED",
+                    failureMessage(stage, attempts, failure));
+        }
+        log.error("[Exhausted Event Pull] ❌ Payment reached terminal failure; failure audit is durable and "
+                        + "Ingress was acknowledged. eventId={}, stage={}, attempts={}",
+                event.eventId(), stage, attempts, failure);
+        return new PaymentEventPullResult(event.eventId(), "TERMINAL_FAILED",
+                failureMessage(stage, attempts, failure));
+    }
+
+    private int terminalFailureAttempts() {
+        int value = exhaustedPullProperties.getTerminalFailureAttempts();
+        if (value <= 0 || value > 100) {
+            throw new IllegalArgumentException(
+                    "trade.pipeline.exhausted-event-pull.terminal-failure-attempts 必须为1~100");
+        }
+        return value;
+    }
+
+    private static String failureMessage(String stage, long attempts, Exception failure) {
+        return "stage=" + stage + ", attempts=" + attempts + ", reason=" + failure.getMessage();
     }
 
     private static PaymentEventMessage toEvent(IngressExhaustedEvent source) {

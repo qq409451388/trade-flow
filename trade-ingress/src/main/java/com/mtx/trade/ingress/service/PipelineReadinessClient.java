@@ -11,6 +11,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.util.UriComponentsBuilder;
 
+import java.net.Proxy;
+
 /** Ingress恢复熔断前主动检查Pipeline真实消费能力。 */
 @Service
 public class PipelineReadinessClient {
@@ -26,6 +28,8 @@ public class PipelineReadinessClient {
             RestClient.Builder restClientBuilder,
             EventDeliveryCircuitProperties properties) {
         SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+        // Pipeline 是内部服务，禁止内部调用误入宿主机代理。
+        requestFactory.setProxy(Proxy.NO_PROXY);
         requestFactory.setConnectTimeout(properties.getReadinessConnectTimeout());
         requestFactory.setReadTimeout(properties.getReadinessReadTimeout());
         this.restClient = restClientBuilder.requestFactory(requestFactory).build();
