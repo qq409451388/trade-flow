@@ -95,5 +95,5 @@ management:
 
 logging:
   level:
-    com.mtx.trade: debug
+    com.mtx.trade: info
     org.springframework.web: info

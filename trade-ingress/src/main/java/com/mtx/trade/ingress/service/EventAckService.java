@@ -25,41 +25,43 @@ public class EventAckService {
     private final PaymentEventDbService paymentEventDbService;
 
     @Transactional(transactionManager = "ingressTransactionManager", rollbackFor = Exception.class)
-    public void ack(Integer contentType, Long eventId) {
+    public boolean ack(Integer contentType, Long eventId) {
         if (contentType == null || eventId == null || eventId <= 0) {
             throw new BusinessException(ErrorCode.PARAM_INVALID, "contentType 或 eventId 无效");
         }
         if (contentType == ContentType.ORDER.getCode()) {
-            ackOrder(eventId);
-            return;
+            return ackOrder(eventId);
         }
         if (contentType == ContentType.PAYMENT.getCode()) {
-            ackPayment(eventId);
-            return;
+            return ackPayment(eventId);
         }
         throw new BusinessException(ErrorCode.PARAM_INVALID, "不支持的事件类型");
     }
 
-    private void ackOrder(Long eventId) {
+    private boolean ackOrder(Long eventId) {
         boolean updated = orderEventDbService.update(new LambdaUpdateWrapper<OrderEventDO>()
                 .eq(OrderEventDO::getId, eventId)
                 .eq(OrderEventDO::getAcked, EventAckStatus.INIT.getCode())
                 .set(OrderEventDO::getAcked, EventAckStatus.ACKED.getCode())
                 .set(OrderEventDO::getAckedTime, LocalDateTime.now()));
-        if (!updated) {
-            ensureOrderAckedOrExists(eventId);
+        if (updated) {
+            return true;
         }
+        ensureOrderAckedOrExists(eventId);
+        return false;
     }
 
-    private void ackPayment(Long eventId) {
+    private boolean ackPayment(Long eventId) {
         boolean updated = paymentEventDbService.update(new LambdaUpdateWrapper<PaymentEventDO>()
                 .eq(PaymentEventDO::getId, eventId)
                 .eq(PaymentEventDO::getAcked, EventAckStatus.INIT.getCode())
                 .set(PaymentEventDO::getAcked, EventAckStatus.ACKED.getCode())
                 .set(PaymentEventDO::getAckedTime, LocalDateTime.now()));
-        if (!updated) {
-            ensurePaymentAckedOrExists(eventId);
+        if (updated) {
+            return true;
         }
+        ensurePaymentAckedOrExists(eventId);
+        return false;
     }
 
     private void ensureOrderAckedOrExists(Long eventId) {

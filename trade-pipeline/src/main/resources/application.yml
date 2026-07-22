@@ -48,7 +48,6 @@ trade:
       group: trade-pipeline-order
       consumer-name: ${PIPELINE_ORDER_CONSUMER_NAME:pipeline-order-1}
       batch-size: 100
-      poll-delay: 1000
       block-timeout: 2s
       reclaim-delay: 30000
       pending-min-idle: 1m
@@ -62,7 +61,6 @@ trade:
       group: trade-pipeline-payment
       consumer-name: ${PIPELINE_PAYMENT_CONSUMER_NAME:pipeline-payment-1}
       batch-size: 100
-      poll-delay: 1000
       block-timeout: 2s
       reclaim-delay: 30000
       pending-min-idle: 1m

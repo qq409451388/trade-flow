@@ -37,6 +37,11 @@
 不建设 Dead Letter Stream。Pipeline 默认每分钟按订单、支付通道分别自动拉取一批耗尽事件，并使用
 MySQL 租约避免多实例重复执行。PEL 只用于进程中断及 ACK 收尾恢复，不承担无限业务重试。
 
+订单和支付的新 Stream 消息分别使用独立的 `StreamMessageListenerContainer` 与单线程长轮询执行器，手动完成
+Ingress ACK 和 Redis XACK；不使用公共 `@Scheduled` 线程执行阻塞读取。订单 PEL、支付 PEL 分别绑定独立单线程
+调度器，耗尽事件主动拉取绑定独立双线程调度器，避免实时消费、故障恢复与最终兜底互相阻塞。
+Ingress 与 Pipeline 的所有 `@Scheduled` 入口统一放在各模块 `task` 包；Service 只暴露任务调用的业务方法。
+
 ## 4. Storage 关键约束
 
 - 稳定路由规则为完整 SHA-256 的无符号值模100，数据库字段保持 `BINARY(32)`。

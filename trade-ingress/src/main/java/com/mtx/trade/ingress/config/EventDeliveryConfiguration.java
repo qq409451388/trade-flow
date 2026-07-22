@@ -17,11 +17,29 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 })
 public class EventDeliveryConfiguration {
 
-    @Bean(name = "taskScheduler")
-    public ThreadPoolTaskScheduler taskScheduler() {
+    public static final String EVENT_RETRY_SCHEDULER = "eventRetryTaskScheduler";
+    public static final String EVENT_REDELIVERY_SCHEDULER = "eventRedeliveryTaskScheduler";
+    public static final String CIRCUIT_RECOVERY_SCHEDULER = "circuitRecoveryTaskScheduler";
+
+    @Bean(name = EVENT_RETRY_SCHEDULER)
+    public ThreadPoolTaskScheduler eventRetryTaskScheduler() {
+        return scheduler(2, "event-retry-");
+    }
+
+    @Bean(name = EVENT_REDELIVERY_SCHEDULER)
+    public ThreadPoolTaskScheduler eventRedeliveryTaskScheduler() {
+        return scheduler(1, "event-redelivery-");
+    }
+
+    @Bean(name = CIRCUIT_RECOVERY_SCHEDULER)
+    public ThreadPoolTaskScheduler circuitRecoveryTaskScheduler() {
+        return scheduler(1, "circuit-recovery-");
+    }
+
+    private static ThreadPoolTaskScheduler scheduler(int poolSize, String threadNamePrefix) {
         ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
-        scheduler.setPoolSize(2);
-        scheduler.setThreadNamePrefix("event-delivery-");
+        scheduler.setPoolSize(poolSize);
+        scheduler.setThreadNamePrefix(threadNamePrefix);
         scheduler.setRemoveOnCancelPolicy(true);
         scheduler.setWaitForTasksToCompleteOnShutdown(false);
         return scheduler;

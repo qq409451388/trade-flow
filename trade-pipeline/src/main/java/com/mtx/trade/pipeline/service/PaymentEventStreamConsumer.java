@@ -7,16 +7,12 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.domain.Range;
-import org.springframework.data.redis.connection.stream.Consumer;
 import org.springframework.data.redis.connection.stream.MapRecord;
 import org.springframework.data.redis.connection.stream.PendingMessage;
 import org.springframework.data.redis.connection.stream.PendingMessages;
 import org.springframework.data.redis.connection.stream.ReadOffset;
 import org.springframework.data.redis.connection.stream.RecordId;
-import org.springframework.data.redis.connection.stream.StreamOffset;
-import org.springframework.data.redis.connection.stream.StreamReadOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -51,31 +47,24 @@ public class PaymentEventStreamConsumer {
         ensureConsumerGroup();
     }
 
-    @Scheduled(fixedDelayString = "${trade.pipeline.payment-event-consumer.poll-delay:1000}")
-    @SuppressWarnings("unchecked")
-    public void consumeNewMessages() {
-        if (!ensureConsumerGroup()) {
-            return;
-        }
-        try {
-            Consumer consumer = Consumer.from(properties.getGroup(), properties.getConsumerName());
-            StreamOffset<String> offset = StreamOffset.create(
-                    properties.getStreamKey(), ReadOffset.lastConsumed());
-            List<MapRecord<String, Object, Object>> records = redisTemplate.opsForStream().read(
-                    consumer,
-                    StreamReadOptions.empty().count(properties.getBatchSize()).block(properties.getBlockTimeout()),
-                    offset);
-            process(records == null ? Collections.emptyList() : records, false);
-        } catch (Exception e) {
-            if (isNoGroup(e)) {
-                groupReady = false;
-            }
-            log.error("[Stream Consumer] ❌ Payment Stream read failed; polling will retry. stream={}",
-                    properties.getStreamKey(), e);
-        }
+    /** 由支付专属 StreamMessageListenerContainer 回调，不占用定时任务线程。 */
+    public void consumeNewMessage(MapRecord<String, String, String> record) {
+        processOne(record, false);
     }
 
-    @Scheduled(fixedDelayString = "${trade.pipeline.payment-event-consumer.reclaim-delay:30000}")
+    public void handleStreamReadError(Throwable error) {
+        if (isNoGroup(error)) {
+            groupReady = false;
+            log.warn("[Stream Consumer] 🔄 Payment consumer group is missing; recreation is being attempted. "
+                            + "stream={}, group={}",
+                    properties.getStreamKey(), properties.getGroup());
+            ensureConsumerGroup();
+            return;
+        }
+        log.error("[Stream Consumer] ❌ Payment Stream listener failed; the subscription remains active. stream={}",
+                properties.getStreamKey(), error);
+    }
+
     @SuppressWarnings("unchecked")
     public void reclaimPendingMessages() {
         if (!ensureConsumerGroup()) {
@@ -118,11 +107,11 @@ public class PaymentEventStreamConsumer {
         }
     }
 
-    private void process(List<MapRecord<String, Object, Object>> records, boolean reclaimed) {
+    private void process(List<? extends MapRecord<String, ?, ?>> records, boolean reclaimed) {
         records.forEach(record -> processOne(record, reclaimed));
     }
 
-    private void processOne(MapRecord<String, Object, Object> record, boolean reclaimed) {
+    private void processOne(MapRecord<String, ?, ?> record, boolean reclaimed) {
         LocalDateTime startedTime = LocalDateTime.now();
         long startedNanos = System.nanoTime();
         String recordId = record.getId().getValue();
@@ -186,7 +175,7 @@ public class PaymentEventStreamConsumer {
 
     private void recordFailureAndAcknowledge(
             PaymentEventMessage event,
-            MapRecord<String, Object, Object> record,
+            MapRecord<String, ?, ?> record,
             int triggerType,
             String stage,
             Exception failure,
@@ -211,7 +200,7 @@ public class PaymentEventStreamConsumer {
                 recordId, event == null ? null : event.eventId(), stage, reclaimed, failure);
     }
 
-    private void acknowledge(MapRecord<String, Object, Object> record, long processLogId) {
+    private void acknowledge(MapRecord<String, ?, ?> record, long processLogId) {
         boolean succeeded = false;
         try {
             redisTemplate.opsForStream().acknowledge(
@@ -234,7 +223,7 @@ public class PaymentEventStreamConsumer {
         }
     }
 
-    private void deleteAcknowledgedRecord(MapRecord<String, Object, Object> record) {
+    private void deleteAcknowledgedRecord(MapRecord<String, ?, ?> record) {
         try {
             redisTemplate.opsForStream().delete(properties.getStreamKey(), record.getId());
         } catch (Exception e) {

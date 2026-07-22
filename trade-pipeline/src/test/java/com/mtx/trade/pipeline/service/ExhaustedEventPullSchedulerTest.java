@@ -3,6 +3,7 @@ package com.mtx.trade.pipeline.service;
 import com.mtx.trade.common.enums.ContentType;
 import com.mtx.trade.pipeline.config.ExhaustedEventPullProperties;
 import com.mtx.trade.pipeline.dto.OrderEventPullResult;
+import com.mtx.trade.pipeline.task.ExhaustedEventPullScheduler;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;

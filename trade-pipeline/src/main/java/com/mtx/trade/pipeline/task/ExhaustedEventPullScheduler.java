@@ -1,11 +1,15 @@
-package com.mtx.trade.pipeline.service;
+package com.mtx.trade.pipeline.task;
 
 import com.mtx.trade.common.enums.ContentType;
+import com.mtx.trade.pipeline.config.EventConsumerConfiguration;
 import com.mtx.trade.pipeline.config.ExhaustedEventPullProperties;
 import com.mtx.trade.pipeline.dto.OrderEventPullCommand;
 import com.mtx.trade.pipeline.dto.OrderEventPullResult;
 import com.mtx.trade.pipeline.dto.PaymentEventPullCommand;
 import com.mtx.trade.pipeline.dto.PaymentEventPullResult;
+import com.mtx.trade.pipeline.service.EventPullLeaseService;
+import com.mtx.trade.pipeline.service.OrderEventPullService;
+import com.mtx.trade.pipeline.service.PaymentEventPullService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -31,7 +35,8 @@ public class ExhaustedEventPullScheduler {
 
     @Scheduled(
             initialDelayString = "${trade.pipeline.exhausted-event-pull.initial-delay-ms:60000}",
-            fixedDelayString = "${trade.pipeline.exhausted-event-pull.fixed-delay-ms:60000}")
+            fixedDelayString = "${trade.pipeline.exhausted-event-pull.fixed-delay-ms:60000}",
+            scheduler = EventConsumerConfiguration.EXHAUSTED_PULL_SCHEDULER)
     public void pullOrders() {
         int contentType = ContentType.ORDER.getCode();
         if (!acquire(contentType)) {
@@ -53,7 +58,8 @@ public class ExhaustedEventPullScheduler {
 
     @Scheduled(
             initialDelayString = "${trade.pipeline.exhausted-event-pull.initial-delay-ms:60000}",
-            fixedDelayString = "${trade.pipeline.exhausted-event-pull.fixed-delay-ms:60000}")
+            fixedDelayString = "${trade.pipeline.exhausted-event-pull.fixed-delay-ms:60000}",
+            scheduler = EventConsumerConfiguration.EXHAUSTED_PULL_SCHEDULER)
     public void pullPayments() {
         int contentType = ContentType.PAYMENT.getCode();
         if (!acquire(contentType)) {

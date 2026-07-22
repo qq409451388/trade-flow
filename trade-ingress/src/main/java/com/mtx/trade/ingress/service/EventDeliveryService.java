@@ -6,6 +6,7 @@ import com.mtx.trade.common.enums.ContentType;
 import com.mtx.trade.common.enums.ErrorCode;
 import com.mtx.trade.common.exception.BusinessException;
 import com.mtx.trade.ingress.common.enums.EventAckStatus;
+import com.mtx.trade.ingress.config.EventDeliveryConfiguration;
 import com.mtx.trade.ingress.config.EventDeliveryProperties;
 import com.mtx.trade.ingress.constants.RedisKeyConstants;
 import com.mtx.trade.ingress.dto.EventDeliveryVO;
@@ -16,8 +17,8 @@ import com.mtx.trade.ingress.service.db.PaymentEventDbService;
 import com.mtx.trade.ingress.utils.RedisLock;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.TaskScheduler;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
@@ -31,7 +32,6 @@ import java.util.concurrent.TimeUnit;
 /** Ingress 事件立即投递、短期重试和超时补发服务。 */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class EventDeliveryService {
 
     private final EventStreamPublisher eventStreamPublisher;
@@ -41,6 +41,23 @@ public class EventDeliveryService {
     private final RedisLock redisLock;
     private final EventDeliveryProperties properties;
     private final EventDeliveryCircuitBreaker circuitBreaker;
+
+    public EventDeliveryService(
+            EventStreamPublisher eventStreamPublisher,
+            OrderEventDbService orderEventDbService,
+            PaymentEventDbService paymentEventDbService,
+            @Qualifier(EventDeliveryConfiguration.EVENT_RETRY_SCHEDULER) TaskScheduler taskScheduler,
+            RedisLock redisLock,
+            EventDeliveryProperties properties,
+            EventDeliveryCircuitBreaker circuitBreaker) {
+        this.eventStreamPublisher = eventStreamPublisher;
+        this.orderEventDbService = orderEventDbService;
+        this.paymentEventDbService = paymentEventDbService;
+        this.taskScheduler = taskScheduler;
+        this.redisLock = redisLock;
+        this.properties = properties;
+        this.circuitBreaker = circuitBreaker;
+    }
 
     public void deliverOrderEvent(OrderEventDO event) {
         if (event == null || event.getId() == null) {
@@ -140,7 +157,6 @@ public class EventDeliveryService {
         }
     }
 
-    @Scheduled(cron = "${trade.ingress.event-delivery.scan-cron:0 */15 * * * *}")
     public void redeliverStaleUnackedEvents() {
         if (!circuitBreaker.allowNormalPublish(ContentType.ORDER.getCode())
                 && !circuitBreaker.allowNormalPublish(ContentType.PAYMENT.getCode())) {
@@ -414,8 +430,9 @@ public class EventDeliveryService {
     private void logIfExhausted(boolean updated, Integer currentCount, String eventType, Long eventId) {
         int count = currentCount == null ? 0 : currentCount;
         if (updated && count + 1 >= maxAutoRedeliveries()) {
-            log.error("[Scheduled Redelivery] ❌ Automatic redelivery is exhausted; Pipeline pull or manual "
-                            + "intervention is required. type={}, eventId={}, attempts={}",
+            log.warn("[Scheduled Redelivery] 🔄 Scheduled redelivery limit reached after a successful publish; "
+                            + "the event now waits for Pipeline exhausted-event pull. "
+                            + "type={}, eventId={}, scheduledAttempts={}",
                     eventType, eventId, count + 1);
         }
     }

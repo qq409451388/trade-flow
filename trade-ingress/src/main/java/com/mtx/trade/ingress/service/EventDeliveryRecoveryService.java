@@ -8,7 +8,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.connection.RedisConnection;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 /** 持有MySQL租约执行熔断探活、HALF_OPEN试投以及关闭后的限批积压恢复。 */
@@ -23,7 +22,6 @@ public class EventDeliveryRecoveryService {
     private final EventDeliveryCircuitProperties properties;
     private final StringRedisTemplate redisTemplate;
 
-    @Scheduled(fixedDelayString = "${trade.ingress.event-delivery.circuit.scheduler-delay-ms:30000}")
     public void recoverCircuitsAndDrainBacklog() {
         if (!properties.isEnabled()) {
             return;

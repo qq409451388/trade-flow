@@ -27,7 +27,7 @@ public record OrderEventMessage(
         return storageSha256.clone();
     }
 
-    public static OrderEventMessage from(Map<Object, Object> fields) {
+    public static OrderEventMessage from(Map<?, ?> fields) {
         try {
             long eventId = positiveLong(fields, "eventId");
             long storageId = positiveLong(fields, "storageId");
@@ -49,7 +49,7 @@ public record OrderEventMessage(
         }
     }
 
-    private static long positiveLong(Map<Object, Object> fields, String name) {
+    private static long positiveLong(Map<?, ?> fields, String name) {
         long value = Long.parseLong(required(fields, name));
         if (value <= 0) {
             throw new IllegalArgumentException(name + " must be positive");
@@ -57,7 +57,7 @@ public record OrderEventMessage(
         return value;
     }
 
-    private static int nonNegativeInt(Map<Object, Object> fields, String name) {
+    private static int nonNegativeInt(Map<?, ?> fields, String name) {
         int value = Integer.parseInt(required(fields, name));
         if (value < 0) {
             throw new IllegalArgumentException(name + " must not be negative");
@@ -65,7 +65,7 @@ public record OrderEventMessage(
         return value;
     }
 
-    private static String required(Map<Object, Object> fields, String name) {
+    private static String required(Map<?, ?> fields, String name) {
         Object value = fields.get(name);
         if (value == null || value.toString().isBlank()) {
             throw new IllegalArgumentException(name + " is required");

@@ -24,12 +24,20 @@ public class EventAckController {
     @PostMapping("/ack")
     public ResponseData<String> ack(@RequestBody EventAckCommand command) {
         try {
-            eventAckService.ack(
+            boolean newlyAcknowledged = eventAckService.ack(
                     command == null ? null : command.contentType(),
                     command == null ? null : command.eventId());
-            log.debug("[Ingress ACK] ✅ Event acknowledged by Pipeline. contentType={}, eventId={}",
-                    command == null ? null : command.contentType(),
-                    command == null ? null : command.eventId());
+            if (newlyAcknowledged) {
+                log.debug("[Ingress ACK] ✅ Event acknowledged by Pipeline for the first time. "
+                                + "contentType={}, eventId={}",
+                        command == null ? null : command.contentType(),
+                        command == null ? null : command.eventId());
+            } else {
+                log.debug("[Ingress ACK] ✅ Duplicate ACK accepted idempotently; event was already acknowledged. "
+                                + "contentType={}, eventId={}",
+                        command == null ? null : command.contentType(),
+                        command == null ? null : command.eventId());
+            }
             return ResponseData.success("acked");
         } catch (BusinessException e) {
             return ResponseData.fail(e.getCode(), e.getMessage(), null);
