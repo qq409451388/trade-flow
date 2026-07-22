@@ -63,14 +63,14 @@ public class OrderController {
             eventDO = this.createEvent(parsedEvent, storageRef);
             return FuiouResponse.ok();
         } catch (StorageWriteException e) {
-            log.warn("storage write failed", e);
+            log.error("[Storage] ❌ Order payload persistence failed; the request was rejected.", e);
             return FuiouResponse.fail(ErrorCode.DATA_CREATE_ERROR.getMessage());
         } catch (BusinessException e) {
             this.recordEventFailure(storageRef, failureStage, parsedEvent, e);
             return FuiouResponse.fail(e.getMessage());
         } catch (Exception e) {
             this.recordEventFailure(storageRef, failureStage, parsedEvent, e);
-            log.error("store push exception, msg:{}", e.getMessage(), e);
+            log.error("[Ingress] ❌ Order push processing failed. reason={}", e.getMessage(), e);
             return FuiouResponse.fail(ErrorCode.SYSTEM_ERROR.getMessage());
         } finally {
             this.publishOrderEvent(eventDO);
@@ -113,7 +113,7 @@ public class OrderController {
                     SourceSystem.FUIOU.getCode(), ContentType.ORDER.getCode(), storageRef,
                     failureStage, parsedEvent, failure);
         } catch (Exception auditException) {
-            log.error("record order event ingest failure failed, storageId={}",
+            log.error("[Ingress Audit] ❌ Order ingest failure could not be recorded. storageId={}",
                     storageRef.storageId(), auditException);
         }
     }
@@ -123,7 +123,8 @@ public class OrderController {
             try {
                 eventDeliveryService.deliverOrderEvent(eventDO);
             } catch (Exception e) {
-                log.warn("stream publish failed, eventId={}", eventDO.getId(), e);
+                log.error("[Redis Stream] ❌ Order publish orchestration failed; the persisted event remains "
+                        + "available for recovery. eventId={}", eventDO.getId(), e);
             }
         }
     }

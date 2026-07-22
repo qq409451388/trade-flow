@@ -69,7 +69,8 @@ public class OrderEventPullService {
             } catch (Exception logFailure) {
                 e.addSuppressed(logFailure);
             }
-            log.error("actively pulled order event processing failed, eventId={}, stage={}",
+            log.error("[Exhausted Event Pull] ❌ Pulled order event processing failed; Ingress remains "
+                            + "unacknowledged. eventId={}, stage={}",
                     event.eventId(), stage, e);
             return new OrderEventPullResult(event.eventId(), "FAILED", e.getMessage());
         }
@@ -81,14 +82,14 @@ public class OrderEventPullService {
             } catch (Exception statusFailure) {
                 e.addSuppressed(statusFailure);
             }
-            log.error("actively pulled order event persisted but Ingress ACK failed, eventId={}",
+            log.error("[Ingress ACK] ❌ Pulled order was persisted but Ingress ACK failed. eventId={}",
                     event.eventId(), e);
             return new OrderEventPullResult(event.eventId(), "ACK_FAILED", e.getMessage());
         }
         try {
             processLogService.recordIngressAck(processLogId, true);
         } catch (Exception e) {
-            log.error("actively pulled order event ACK succeeded but audit update failed, "
+            log.error("[Processing Audit] ❌ Pulled order ACK succeeded but audit update failed. "
                             + "eventId={}, processLogId={}",
                     event.eventId(), processLogId, e);
             return new OrderEventPullResult(event.eventId(), "ACK_AUDIT_FAILED", e.getMessage());

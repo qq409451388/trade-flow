@@ -62,7 +62,8 @@ public class OrderPersistService {
         } else {
             long existingVersion = versionOf(existing.getSourceUpdateTime());
             if (aggregate.messageVersion() <= existingVersion) {
-                log.info("ignore duplicate or stale order event, orderNo={}, incomingVersion={}, existingVersion={}",
+                log.debug("[Order Persistence] ✅ Duplicate or stale event was ignored. "
+                                + "orderNo={}, incomingVersion={}, existingVersion={}",
                         incoming.getOrderNo(), aggregate.messageVersion(), existingVersion);
                 return OrderPersistResult.IGNORED_DUPLICATE_OR_STALE;
             }
@@ -76,14 +77,16 @@ public class OrderPersistService {
                             .or()
                             .lt(OrderDO::getSourceUpdateTime, incoming.getSourceUpdateTime())));
             if (!updated) {
-                log.info("order event lost version race and is ignored, orderNo={}, incomingVersion={}",
+                log.debug("[Order Persistence] 🔄 Version race was lost; the older event was ignored. "
+                                + "orderNo={}, incomingVersion={}",
                         incoming.getOrderNo(), aggregate.messageVersion());
                 return OrderPersistResult.IGNORED_DUPLICATE_OR_STALE;
             }
         }
 
         replaceChildren(aggregate, yearStart, nextYearStart);
-        log.info("order snapshot persisted, orderNo={}, version={}, items={}, specs={}, packageItems={}",
+        log.debug("[Order Persistence] ✅ Order snapshot persisted. "
+                        + "orderNo={}, version={}, items={}, specs={}, packageItems={}",
                 incoming.getOrderNo(), aggregate.messageVersion(), aggregate.items().size(),
                 aggregate.specs().size(), aggregate.packageItems().size());
         return OrderPersistResult.APPLIED;

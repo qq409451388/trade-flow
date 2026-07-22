@@ -66,6 +66,12 @@ trade:
       block-timeout: 2s
       reclaim-delay: 30000
       pending-min-idle: 1m
+    exhausted-event-pull:
+      enabled: true
+      initial-delay-ms: 60000
+      fixed-delay-ms: 60000
+      batch-size: 100
+      lease-duration: 15m
     fuiou-order:
       zone-id: Asia/Shanghai
     fuiou-payment:

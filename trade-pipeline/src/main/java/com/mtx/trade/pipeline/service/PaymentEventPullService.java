@@ -69,7 +69,8 @@ public class PaymentEventPullService {
             } catch (Exception logFailure) {
                 e.addSuppressed(logFailure);
             }
-            log.error("actively pulled payment event processing failed, eventId={}, stage={}",
+            log.error("[Exhausted Event Pull] ❌ Pulled payment event processing failed; Ingress remains "
+                            + "unacknowledged. eventId={}, stage={}",
                     event.eventId(), stage, e);
             return new PaymentEventPullResult(event.eventId(), "FAILED", e.getMessage());
         }
@@ -81,13 +82,14 @@ public class PaymentEventPullService {
             } catch (Exception statusFailure) {
                 e.addSuppressed(statusFailure);
             }
-            log.error("actively pulled payment persisted but Ingress ACK failed, eventId={}", event.eventId(), e);
+            log.error("[Ingress ACK] ❌ Pulled payment was persisted but Ingress ACK failed. eventId={}",
+                    event.eventId(), e);
             return new PaymentEventPullResult(event.eventId(), "ACK_FAILED", e.getMessage());
         }
         try {
             processLogService.recordIngressAck(processLogId, true);
         } catch (Exception e) {
-            log.error("actively pulled payment event ACK succeeded but audit update failed, "
+            log.error("[Processing Audit] ❌ Pulled payment ACK succeeded but audit update failed. "
                             + "eventId={}, processLogId={}",
                     event.eventId(), processLogId, e);
             return new PaymentEventPullResult(event.eventId(), "ACK_AUDIT_FAILED", e.getMessage());

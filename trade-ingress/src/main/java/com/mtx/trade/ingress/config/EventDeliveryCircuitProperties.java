@@ -15,7 +15,7 @@ public class EventDeliveryCircuitProperties {
     private int failureThreshold = 10;
     private Duration healthCheckDelay = Duration.ofSeconds(30);
     private int healthSuccessThreshold = 2;
-    private int halfOpenPermits = 10;
+    private int pipelineFailureThreshold = 2;
     private Duration recoveryLease = Duration.ofMinutes(2);
     private Duration stateCacheTtl = Duration.ofSeconds(5);
     private int recoveryBatchSize = 100;

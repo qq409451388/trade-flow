@@ -42,7 +42,8 @@ public class PaymentPersistService {
                     .eq(PaymentDO::getPaySsn, incoming.getPaySsn()), false);
             if (existing != null) {
                 if (Arrays.equals(existing.getPayloadSha256(), incoming.getPayloadSha256())) {
-                    log.info("ignore duplicate payment event, paySsn={}, routeYear={}",
+                    log.debug("[Payment Persistence] ✅ Duplicate payment event was ignored. "
+                                    + "paySsn={}, routeYear={}",
                             incoming.getPaySsn(), routeYear);
                     return PaymentPersistResult.IGNORED_DUPLICATE;
                 }
@@ -69,7 +70,7 @@ public class PaymentPersistService {
                     throw dataError("支付结算账户批量新增失败: paySsn=" + incoming.getPaySsn());
                 }
             }
-            log.info("payment persisted, paySsn={}, routeYear={}, accounts={}",
+            log.debug("[Payment Persistence] ✅ Payment persisted. paySsn={}, routeYear={}, accounts={}",
                     incoming.getPaySsn(), routeYear, aggregate.accounts().size());
             return PaymentPersistResult.APPLIED;
         }

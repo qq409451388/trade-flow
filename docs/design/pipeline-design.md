@@ -93,6 +93,8 @@ Pipeline 业务事务显式使用 `pipelineTransactionManager`，不得将 Pipel
   失败阶段、错误码、原因和耗时。失败流水无法落库时不XACK，确保该失败不会静默消失。
 - `POST /order-event/pull` 可按event ID或批量主动拉取Ingress耗尽事件，直接读取Storage并处理，
   成功后ACK Ingress，不经过Redis。
+- Pipeline 默认每分钟按订单、支付通道各自动拉取一批耗尽事件；每批100条，使用MySQL租约避免
+  多实例重复执行，作为Redis Stream记录被误删后的最终自动恢复路径。
 - Pipeline提供 `/readiness/event-consumer`，按内容类型检查Pipeline数据库、Storage数据源、Redis和consumer group，
 供Ingress熔断恢复使用。
 

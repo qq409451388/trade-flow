@@ -7,7 +7,9 @@ import com.zaxxer.hikari.HikariDataSource;
 import org.apache.ibatis.session.SqlSessionFactory;
 import org.apache.shardingsphere.driver.api.ShardingSphereDataSourceFactory;
 import org.apache.shardingsphere.infra.config.mode.ModeConfiguration;
+import org.apache.shardingsphere.infra.config.rule.RuleConfiguration;
 import org.apache.shardingsphere.sharding.api.config.ShardingRuleConfiguration;
+import org.apache.shardingsphere.single.config.SingleRuleConfiguration;
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
@@ -19,8 +21,8 @@ import org.springframework.transaction.PlatformTransactionManager;
 
 import javax.sql.DataSource;
 import java.sql.SQLException;
-import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 
@@ -52,17 +54,25 @@ public class PipelineDataSourceConfiguration {
 
         Properties shardingProperties = new Properties();
         shardingProperties.setProperty("sql-show", Boolean.toString(properties.isSqlShow()));
+        List<RuleConfiguration> rules = List.of(
+                pipelineShardingRuleConfiguration(properties),
+                pipelineSingleRuleConfiguration());
         return ShardingSphereDataSourceFactory.createDataSource(
                 "trade_pipeline",
                 new ModeConfiguration("Memory", null),
                 dataSources,
-                Collections.singletonList(pipelineShardingRuleConfiguration(properties)),
+                rules,
                 shardingProperties);
     }
 
     @Bean
     public ShardingRuleConfiguration pipelineShardingRuleConfiguration(PipelineShardingProperties properties) {
         return PipelineShardingRuleFactory.create(properties);
+    }
+
+    @Bean
+    public SingleRuleConfiguration pipelineSingleRuleConfiguration() {
+        return PipelineShardingRuleFactory.createSingleTableRule();
     }
 
     @Bean(name = "pipelineSqlSessionFactory")

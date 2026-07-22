@@ -8,6 +8,7 @@ import org.springframework.context.annotation.Configuration;
 @EnableConfigurationProperties({
         OrderEventConsumerProperties.class,
         PaymentEventConsumerProperties.class,
+        ExhaustedEventPullProperties.class,
         FuiouOrderProperties.class,
         FuiouPaymentProperties.class
 })

@@ -70,7 +70,8 @@ public class PaymentEventStreamConsumer {
             if (isNoGroup(e)) {
                 groupReady = false;
             }
-            log.error("read payment event stream failed, stream={}", properties.getStreamKey(), e);
+            log.error("[Stream Consumer] ❌ Payment Stream read failed; polling will retry. stream={}",
+                    properties.getStreamKey(), e);
         }
     }
 
@@ -100,14 +101,19 @@ public class PaymentEventStreamConsumer {
                     properties.getPendingMinIdle(), claimIds.toArray(RecordId[]::new));
             List<MapRecord<String, Object, Object>> claimedRecords =
                     claimed == null ? Collections.emptyList() : claimed;
+            log.info("[PEL Recovery] 🔄 Reclaiming payment pending messages. requested={}, reclaimed={}, group={}",
+                    claimIds.size(), claimedRecords.size(), properties.getGroup());
             process(claimedRecords, true);
             pelOrphanCleaner.clean(
                     properties.getStreamKey(), properties.getGroup(), claimIds, claimedRecords);
+            log.info("[PEL Recovery] ✅ Payment reclaim batch completed. requested={}, reclaimed={}, group={}",
+                    claimIds.size(), claimedRecords.size(), properties.getGroup());
         } catch (Exception e) {
             if (isNoGroup(e)) {
                 groupReady = false;
             }
-            log.error("reclaim payment event PEL failed, stream={}, group={}",
+            log.error("[PEL Recovery] ❌ Payment pending-message reclaim failed; entries remain recoverable. "
+                            + "stream={}, group={}",
                     properties.getStreamKey(), properties.getGroup(), e);
         }
     }
@@ -148,7 +154,8 @@ public class PaymentEventStreamConsumer {
             processLogId = processLogService.recordSuccess(
                     event, recordId, triggerType, result, startedTime, startedNanos);
         } catch (Exception e) {
-            log.error("record successful payment attempt failed; message remains pending, "
+            log.error("[Processing Audit] ❌ Successful payment processing could not be recorded; message remains "
+                            + "in PEL. "
                             + "recordId={}, eventId={}, storageId={}, eventKey={}",
                     recordId, event.eventId(), event.storageId(), event.eventKey(), e);
             return;
@@ -157,7 +164,7 @@ public class PaymentEventStreamConsumer {
             ingressEventAckClient.ack(event.contentType(), event.eventId());
         } catch (Exception e) {
             recordIngressAckFailure(processLogId, e);
-            log.error("payment persisted but Ingress ACK failed; message remains pending, "
+            log.error("[Ingress ACK] ❌ Payment was persisted but Ingress ACK failed; message remains in PEL. "
                             + "recordId={}, eventId={}, storageId={}, eventKey={}",
                     recordId, event.eventId(), event.storageId(), event.eventKey(), e);
             return;
@@ -165,13 +172,15 @@ public class PaymentEventStreamConsumer {
         try {
             processLogService.recordIngressAck(processLogId, true);
         } catch (Exception e) {
-            log.error("record successful payment Ingress ACK failed; message remains pending, "
+            log.error("[Processing Audit] ❌ Successful payment Ingress ACK could not be recorded; message remains "
+                            + "in PEL. "
                             + "processLogId={}, recordId={}, eventId={}",
                     processLogId, recordId, event.eventId(), e);
             return;
         }
         acknowledge(record, processLogId);
-        log.info("payment event processed, recordId={}, eventId={}, storageId={}, eventKey={}, result={}, reclaimed={}",
+        log.debug("[Stream Consumer] ✅ Payment event completed. recordId={}, eventId={}, storageId={}, "
+                        + "eventKey={}, result={}, reclaimed={}",
                 recordId, event.eventId(), event.storageId(), event.eventKey(), result, reclaimed);
     }
 
@@ -190,12 +199,14 @@ public class PaymentEventStreamConsumer {
             processLogId = processLogService.recordFailure(
                     event, recordId, triggerType, stage, failure, startedTime, startedNanos);
         } catch (Exception logFailure) {
-            log.error("record failed payment attempt failed; message remains pending, recordId={}, eventId={}",
+            log.error("[Processing Audit] ❌ Payment failure could not be recorded; message remains in PEL. "
+                            + "recordId={}, eventId={}",
                     recordId, event == null ? null : event.eventId(), logFailure);
             return;
         }
         acknowledge(record, processLogId);
-        log.error("payment processing failed and Redis delivery was acknowledged; Ingress remains unacked, "
+        log.error("[Stream Consumer] ❌ Payment processing failed; Redis delivery was acknowledged and Ingress "
+                        + "remains unacknowledged for recovery. "
                         + "recordId={}, eventId={}, stage={}, reclaimed={}",
                 recordId, event == null ? null : event.eventId(), stage, reclaimed, failure);
     }
@@ -207,13 +218,14 @@ public class PaymentEventStreamConsumer {
                     properties.getStreamKey(), properties.getGroup(), record.getId());
             succeeded = true;
         } catch (Exception e) {
-            log.error("payment Redis XACK failed; record remains recoverable in PEL, recordId={}",
+            log.error("[Redis XACK] ❌ Payment XACK failed; record remains recoverable in PEL. recordId={}",
                     record.getId().getValue(), e);
         } finally {
             try {
                 processLogService.recordRedisXack(processLogId, succeeded);
             } catch (Exception e) {
-                log.error("record payment Redis XACK status failed, processLogId={}, recordId={}",
+                log.error("[Processing Audit] ❌ Payment XACK status could not be recorded. "
+                                + "processLogId={}, recordId={}",
                         processLogId, record.getId().getValue(), e);
             }
         }
@@ -226,7 +238,8 @@ public class PaymentEventStreamConsumer {
         try {
             redisTemplate.opsForStream().delete(properties.getStreamKey(), record.getId());
         } catch (Exception e) {
-            log.warn("delete acknowledged payment Stream record failed; MAXLEN remains as fallback, recordId={}",
+            log.warn("[Redis Stream] 🔄 Acknowledged payment record could not be deleted; MAXLEN remains the "
+                            + "cleanup fallback. recordId={}",
                     record.getId().getValue(), e);
         }
     }
@@ -251,7 +264,7 @@ public class PaymentEventStreamConsumer {
             try {
                 redisTemplate.opsForStream().createGroup(
                         properties.getStreamKey(), ReadOffset.from("0-0"), properties.getGroup());
-                log.info("payment event consumer group created, stream={}, group={}",
+                log.info("[Stream Consumer] ✅ Payment consumer group is ready. stream={}, group={}",
                         properties.getStreamKey(), properties.getGroup());
             } catch (Exception e) {
                 if (!isBusyGroup(e)) {
@@ -261,7 +274,8 @@ public class PaymentEventStreamConsumer {
             groupReady = true;
             return true;
         } catch (Exception e) {
-            log.error("initialize payment event consumer group failed, stream={}, group={}",
+            log.error("[Stream Consumer] ❌ Payment consumer group initialization failed; consumption is paused. "
+                            + "stream={}, group={}",
                     properties.getStreamKey(), properties.getGroup(), e);
             return false;
         } finally {
@@ -269,7 +283,8 @@ public class PaymentEventStreamConsumer {
                 try {
                     redisTemplate.opsForStream().delete(properties.getStreamKey(), initRecordId);
                 } catch (Exception e) {
-                    log.warn("delete payment stream init record failed, recordId={}", initRecordId, e);
+                    log.warn("[Redis Stream] 🔄 Payment initialization record cleanup failed; MAXLEN remains the "
+                            + "fallback. recordId={}", initRecordId, e);
                 }
             }
         }

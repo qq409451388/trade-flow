@@ -42,7 +42,7 @@ public class StorageWriteService {
             return storageWriter.putIfAbsent(command);
         } finally {
             if (!redisLock.releaseLock(lockKey)) {
-                log.warn("storage Redis lock release failed, key={}", lockKey);
+                log.warn("[Storage Lock] 🔄 Redis lock release failed; lease expiry will release it. key={}", lockKey);
             }
         }
     }

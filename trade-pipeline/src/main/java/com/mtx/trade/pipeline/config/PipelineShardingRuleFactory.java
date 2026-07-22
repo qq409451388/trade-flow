@@ -6,6 +6,7 @@ import org.apache.shardingsphere.sharding.api.config.rule.ShardingTableRuleConfi
 import org.apache.shardingsphere.sharding.api.config.strategy.sharding.ComplexShardingStrategyConfiguration;
 import org.apache.shardingsphere.sharding.api.config.strategy.sharding.HintShardingStrategyConfiguration;
 import org.apache.shardingsphere.sharding.api.config.strategy.sharding.StandardShardingStrategyConfiguration;
+import org.apache.shardingsphere.single.config.SingleRuleConfiguration;
 
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -22,6 +23,9 @@ public final class PipelineShardingRuleFactory {
     public static final String ORDER_PACKAGE_ITEM_TABLE = "oms_order_package_item";
     public static final String PAYMENT_TABLE = "oms_payment";
     public static final String PAYMENT_ACCOUNT_TABLE = "oms_payment_account";
+    public static final String ORDER_EVENT_LOG_TABLE = "pipeline_order_event_log";
+    public static final String PAYMENT_EVENT_LOG_TABLE = "pipeline_payment_event_log";
+    public static final String EVENT_PULL_CONTROL_TABLE = "pipeline_event_pull_control";
 
     private static final String YEAR_ALGORITHM = "pipeline_order_year";
     private static final String YEAR_ORDER_ALGORITHM = "pipeline_order_item_year_hash";
@@ -55,6 +59,14 @@ public final class PipelineShardingRuleFactory {
         rule.getShardingAlgorithms().put(REQUIRED_YEAR_HINT_ALGORITHM,
                 classBasedAlgorithm("HINT", PipelineRequiredYearHintShardingAlgorithm.class));
         return rule;
+    }
+
+    /** 显式注册 Pipeline 审计日志单表，避免仅配置分片规则时逻辑元数据不可见。 */
+    public static SingleRuleConfiguration createSingleTableRule() {
+        return new SingleRuleConfiguration(List.of(
+                DATA_SOURCE_NAME + "." + ORDER_EVENT_LOG_TABLE,
+                DATA_SOURCE_NAME + "." + PAYMENT_EVENT_LOG_TABLE,
+                DATA_SOURCE_NAME + "." + EVENT_PULL_CONTROL_TABLE), DATA_SOURCE_NAME);
     }
 
     private static ShardingTableRuleConfiguration yearTableRule(

@@ -28,11 +28,35 @@ public class EventDeliveryRecoveryService {
         if (!properties.isEnabled()) {
             return;
         }
+        for (EventDeliveryControlDO control : circuitBreaker.listClosedForHealthCheck()) {
+            checkClosedCircuit(control.getContentType());
+        }
         for (EventDeliveryControlDO control : circuitBreaker.listDueForHealthCheck()) {
-            recoverOpenCircuit(control.getContentType());
+            if (control.getCircuitStatus() == DeliveryCircuitStatus.OPEN.getCode()) {
+                recoverOpenCircuit(control.getContentType());
+            } else {
+                recoverHalfOpenCircuit(control.getContentType());
+            }
         }
         for (EventDeliveryControlDO control : circuitBreaker.listDrainable()) {
             drainBacklog(control);
+        }
+    }
+
+    private void checkClosedCircuit(int contentType) {
+        if (!circuitBreaker.claim(contentType, DeliveryCircuitStatus.CLOSED.getCode())) {
+            return;
+        }
+        try {
+            if (!pipelineReadinessClient.isReady(contentType)) {
+                throw new IllegalStateException("Pipeline event consumer is not ready");
+            }
+            circuitBreaker.recordClosedPipelineReady(contentType);
+        } catch (Exception e) {
+            circuitBreaker.recordClosedPipelineFailure(contentType, e);
+            log.warn("[Circuit Breaker] 🔄 Pipeline readiness check failed; waiting before the next check. "
+                            + "contentType={}, reason={}",
+                    contentType, e.getMessage());
         }
     }
 
@@ -49,20 +73,56 @@ public class EventDeliveryRecoveryService {
             }
             boolean halfOpen = circuitBreaker.recordHealthSuccess(contentType);
             if (halfOpen) {
-                probeAndClose(contentType);
+                startHalfOpenProbe(contentType);
             }
         } catch (Exception e) {
             circuitBreaker.recordHealthFailure(contentType, e);
-            log.warn("event delivery circuit health check failed, contentType={}", contentType, e);
+            log.warn("[Circuit Breaker] 🔄 Recovery check is still failing; circuit remains OPEN. "
+                            + "contentType={}, reason={}",
+                    contentType, e.getMessage());
         }
     }
 
-    private void probeAndClose(int contentType) {
+    private void startHalfOpenProbe(int contentType) {
         try {
-            eventDeliveryService.publishHalfOpenProbe(
-                    contentType, Math.max(1, properties.getHalfOpenPermits()));
-            long cutoffId = eventDeliveryService.maxUnackedEventId(contentType);
-            circuitBreaker.closeAfterProbe(contentType, cutoffId);
+            Long probeEventId = eventDeliveryService.publishHalfOpenProbe(contentType);
+            if (probeEventId == null) {
+                log.info("[Circuit Breaker] ✅ No unacknowledged event requires a probe; closing the circuit. "
+                        + "contentType={}", contentType);
+                circuitBreaker.closeAfterProbe(contentType, 0L);
+                return;
+            }
+            log.warn("[Circuit Breaker] 🔄 Probe event published; waiting for Pipeline ACK. "
+                    + "contentType={}, eventId={}", contentType, probeEventId);
+            circuitBreaker.waitForProbeAck(contentType, probeEventId);
+        } catch (Exception e) {
+            circuitBreaker.reopenAfterProbeFailure(contentType, e);
+        }
+    }
+
+    private void recoverHalfOpenCircuit(int contentType) {
+        if (!circuitBreaker.claim(contentType, DeliveryCircuitStatus.HALF_OPEN.getCode())) {
+            return;
+        }
+        try {
+            if (!pipelineReadinessClient.isReady(contentType)) {
+                throw new IllegalStateException("Pipeline event consumer is not ready");
+            }
+            EventDeliveryControlDO control = circuitBreaker.getControl(contentType);
+            Long probeEventId = control == null ? null : control.getProbeEventId();
+            if (probeEventId == null) {
+                startHalfOpenProbe(contentType);
+                return;
+            }
+            if (eventDeliveryService.isEventAcked(contentType, probeEventId)) {
+                log.info("[Circuit Breaker] ✅ Probe ACK received; closing the circuit. "
+                        + "contentType={}, eventId={}", contentType, probeEventId);
+                circuitBreaker.closeAfterProbe(contentType, eventDeliveryService.maxUnackedEventId(contentType));
+            } else {
+                log.warn("[Circuit Breaker] 🔄 Probe ACK is still pending; circuit remains HALF_OPEN. "
+                        + "contentType={}, eventId={}", contentType, probeEventId);
+                circuitBreaker.waitForProbeAck(contentType, probeEventId);
+            }
         } catch (Exception e) {
             circuitBreaker.reopenAfterProbeFailure(contentType, e);
         }
@@ -85,13 +145,21 @@ public class EventDeliveryRecoveryService {
                     control.getRecoveryCutoffId(),
                     Math.max(1, properties.getRecoveryBatchSize()));
             circuitBreaker.advanceRecoveryCursor(contentType, result.cursorId(), result.finished());
+            if (result.finished()) {
+                log.info("[Backlog Recovery] ✅ Backlog recovery completed. contentType={}, cursorId={}",
+                        contentType, result.cursorId());
+            } else {
+                log.info("[Backlog Recovery] 🔄 Recovery batch completed; more backlog remains. "
+                        + "contentType={}, cursorId={}", contentType, result.cursorId());
+            }
         } catch (Exception e) {
             circuitBreaker.recordPublishFailure(contentType, e);
             circuitBreaker.advanceRecoveryCursor(
                     contentType,
                     control.getRecoveryCursorId() == null ? 0L : control.getRecoveryCursorId(),
                     false);
-            log.warn("recover event delivery backlog failed, contentType={}", contentType, e);
+            log.error("[Backlog Recovery] ❌ Backlog recovery batch failed; the cursor is retained for retry. "
+                    + "contentType={}", contentType, e);
         }
     }
 

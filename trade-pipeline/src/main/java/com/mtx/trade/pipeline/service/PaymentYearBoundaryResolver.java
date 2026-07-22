@@ -46,13 +46,15 @@ public class PaymentYearBoundaryResolver {
             PaymentDO source = findByPaySsnInYear(payment.getSourcePaySsn(), year);
             if (source != null) {
                 if (source.getPayState() != null && source.getPayState() != 1) {
-                    log.warn("sourcePaySsn points to non-payment row, sourcePaySsn={}, payState={}",
+                    log.warn("[Payment Routing] 🔄 sourcePaySsn points to a non-payment row; using the fallback "
+                                    + "year. sourcePaySsn={}, payState={}",
                             payment.getSourcePaySsn(), source.getPayState());
                 }
                 return year;
             }
         }
-        log.warn("SOURCE_PAYMENT_NOT_FOUND: paySsn={}, sourcePaySsn={}, candidateYear={}",
+        log.warn("[Payment Routing] 🔄 Source payment was not found; using the candidate year. "
+                        + "paySsn={}, sourcePaySsn={}, candidateYear={}",
                 payment.getPaySsn(), payment.getSourcePaySsn(), candidateYear);
         return candidateYear;
     }

@@ -58,7 +58,7 @@ trade:
         health-check-delay: 30s
         scheduler-delay-ms: 30000
         health-success-threshold: 2
-        half-open-permits: 10
+        pipeline-failure-threshold: 2
         recovery-lease: 2m
         state-cache-ttl: 5s
         recovery-batch-size: 100

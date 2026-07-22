@@ -154,16 +154,19 @@ public class EventDeliveryService {
         } catch (RuntimeException e) {
             circuitBreaker.recordPublishFailure(ContentType.ORDER.getCode(), e);
             circuitBreaker.recordPublishFailure(ContentType.PAYMENT.getCode(), e);
-            log.warn("event redelivery Redis job lock unavailable", e);
+            log.error("[Scheduled Redelivery] ❌ Redis job lock is unavailable; this scan was skipped.", e);
             return;
         }
         if (!locked) {
+            log.debug("[Scheduled Redelivery] 🔄 Another Ingress instance owns the scan lease; this run was skipped.");
             return;
         }
         try {
             LocalDateTime cutoff = LocalDateTime.now().minus(properties.getStaleAfter());
+            log.info("[Scheduled Redelivery] 🔄 Scanning stale unacknowledged events. cutoff={}", cutoff);
             scanOrderEvents(cutoff);
             scanPaymentEvents(cutoff);
+            log.info("[Scheduled Redelivery] ✅ Scheduled scan completed. cutoff={}", cutoff);
         } finally {
             redisLock.releaseLock(RedisKeyConstants.EVENT_REDELIVERY_JOB_LOCK);
         }
@@ -188,7 +191,8 @@ public class EventDeliveryService {
         try {
             taskScheduler.schedule(task, Instant.now().plus(delay));
         } catch (RuntimeException e) {
-            log.warn("event retry schedule failed, type={}, eventId={}, delay={}", eventType, eventId, delay, e);
+            log.error("[Scheduled Redelivery] ❌ Retry could not be scheduled; the periodic scan remains the "
+                    + "fallback. type={}, eventId={}, delay={}", eventType, eventId, delay, e);
         }
     }
 
@@ -262,7 +266,8 @@ public class EventDeliveryService {
 
     private boolean publishOrderSafely(OrderEventDO event, String reason) {
         if (!circuitBreaker.allowNormalPublish(ContentType.ORDER.getCode())) {
-            log.debug("order event publish skipped by open circuit, eventId={}, reason={}", event.getId(), reason);
+            log.debug("[Circuit Breaker] 🔄 Order publication is paused while the circuit is OPEN. "
+                    + "eventId={}, trigger={}", event.getId(), reason);
             return false;
         }
         try {
@@ -270,14 +275,16 @@ public class EventDeliveryService {
             return true;
         } catch (RuntimeException e) {
             circuitBreaker.recordPublishFailure(ContentType.ORDER.getCode(), e);
-            log.warn("order event publish failed, eventId={}, reason={}", event.getId(), reason, e);
+            log.error("[Redis Stream] ❌ Order event publication failed; the event remains unacknowledged. "
+                    + "eventId={}, trigger={}", event.getId(), reason, e);
             return false;
         }
     }
 
     private boolean publishPaymentSafely(PaymentEventDO event, String reason) {
         if (!circuitBreaker.allowNormalPublish(ContentType.PAYMENT.getCode())) {
-            log.debug("payment event publish skipped by open circuit, eventId={}, reason={}", event.getId(), reason);
+            log.debug("[Circuit Breaker] 🔄 Payment publication is paused while the circuit is OPEN. "
+                    + "eventId={}, trigger={}", event.getId(), reason);
             return false;
         }
         try {
@@ -285,30 +292,43 @@ public class EventDeliveryService {
             return true;
         } catch (RuntimeException e) {
             circuitBreaker.recordPublishFailure(ContentType.PAYMENT.getCode(), e);
-            log.warn("payment event publish failed, eventId={}, reason={}", event.getId(), reason, e);
+            log.error("[Redis Stream] ❌ Payment event publication failed; the event remains unacknowledged. "
+                    + "eventId={}, trigger={}", event.getId(), reason, e);
             return false;
         }
     }
 
-    /** HALF_OPEN 专用探测发布；普通请求不能调用此路径。 */
-    public void publishHalfOpenProbe(int contentType, int limit) {
+    /** HALF_OPEN 专用探测发布；返回等待 Pipeline ACK 的 event ID。 */
+    public Long publishHalfOpenProbe(int contentType) {
         if (contentType == ContentType.ORDER.getCode()) {
-            List<OrderEventDO> events = orderEventDbService.list(new LambdaQueryWrapper<OrderEventDO>()
+            OrderEventDO event = orderEventDbService.getOne(new LambdaQueryWrapper<OrderEventDO>()
                     .eq(OrderEventDO::getAcked, EventAckStatus.INIT.getCode())
                     .orderByAsc(OrderEventDO::getId)
-                    .last("LIMIT " + Math.max(1, limit)));
-            for (OrderEventDO event : events) {
-                eventStreamPublisher.publishOrderEvent(event);
+                    .last("LIMIT 1"), false);
+            if (event == null) {
+                return null;
             }
-            return;
+            eventStreamPublisher.publishOrderEvent(event);
+            return event.getId();
         }
-        List<PaymentEventDO> events = paymentEventDbService.list(new LambdaQueryWrapper<PaymentEventDO>()
+        PaymentEventDO event = paymentEventDbService.getOne(new LambdaQueryWrapper<PaymentEventDO>()
                 .eq(PaymentEventDO::getAcked, EventAckStatus.INIT.getCode())
                 .orderByAsc(PaymentEventDO::getId)
-                .last("LIMIT " + Math.max(1, limit)));
-        for (PaymentEventDO event : events) {
-            eventStreamPublisher.publishPaymentEvent(event);
+                .last("LIMIT 1"), false);
+        if (event == null) {
+            return null;
         }
+        eventStreamPublisher.publishPaymentEvent(event);
+        return event.getId();
+    }
+
+    public boolean isEventAcked(int contentType, long eventId) {
+        if (contentType == ContentType.ORDER.getCode()) {
+            OrderEventDO event = orderEventDbService.getById(eventId);
+            return event != null && Objects.equals(event.getAcked(), EventAckStatus.ACKED.getCode());
+        }
+        PaymentEventDO event = paymentEventDbService.getById(eventId);
+        return event != null && Objects.equals(event.getAcked(), EventAckStatus.ACKED.getCode());
     }
 
     public long maxUnackedEventId(int contentType) {
@@ -394,7 +414,8 @@ public class EventDeliveryService {
     private void logIfExhausted(boolean updated, Integer currentCount, String eventType, Long eventId) {
         int count = currentCount == null ? 0 : currentCount;
         if (updated && count + 1 >= maxAutoRedeliveries()) {
-            log.warn("event auto redelivery exhausted, type={}, eventId={}, count={}",
+            log.error("[Scheduled Redelivery] ❌ Automatic redelivery is exhausted; Pipeline pull or manual "
+                            + "intervention is required. type={}, eventId={}, attempts={}",
                     eventType, eventId, count + 1);
         }
     }

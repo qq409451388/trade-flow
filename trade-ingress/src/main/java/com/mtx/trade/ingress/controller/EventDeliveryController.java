@@ -37,7 +37,7 @@ public class EventDeliveryController {
         } catch (BusinessException e) {
             return ResponseData.fail(e.getCode(), e.getMessage(), null);
         } catch (Exception e) {
-            log.error("query exhausted event failed, contentType={}", contentType, e);
+            log.error("[Scheduled Redelivery] ❌ Exhausted-event query failed. contentType={}", contentType, e);
             return ResponseData.fail(ErrorCode.SYSTEM_ERROR);
         }
     }
@@ -52,7 +52,8 @@ public class EventDeliveryController {
         } catch (BusinessException e) {
             return ResponseData.fail(e.getCode(), e.getMessage(), null);
         } catch (Exception e) {
-            log.error("manual event redelivery failed, command={}", command, e);
+            log.error("[Manual Redelivery] ❌ Manual redelivery failed; the event remains unacknowledged. "
+                    + "command={}", command, e);
             return ResponseData.fail(ErrorCode.SYSTEM_ERROR);
         }
     }
@@ -67,7 +68,7 @@ public class EventDeliveryController {
         } catch (BusinessException e) {
             return ResponseData.fail(e.getCode(), e.getMessage(), null);
         } catch (Exception e) {
-            log.error("resume event redelivery failed, command={}", command, e);
+            log.error("[Manual Redelivery] ❌ Automatic redelivery could not be resumed. command={}", command, e);
             return ResponseData.fail(ErrorCode.SYSTEM_ERROR);
         }
     }

@@ -48,11 +48,13 @@ public class PelOrphanCleaner {
                 }
                 Long acknowledged = redisTemplate.opsForStream().acknowledge(streamKey, group, attemptedId);
                 if (acknowledged != null && acknowledged > 0) {
-                    log.warn("cleaned trimmed Stream PEL orphan, stream={}, group={}, recordId={}",
+                    log.warn("[PEL Recovery] ✅ Trimmed Stream orphan was removed from PEL. "
+                                    + "stream={}, group={}, recordId={}",
                             streamKey, group, attemptedId.getValue());
                 }
             } catch (RuntimeException e) {
-                log.warn("check Stream PEL orphan failed; keep pending reference, stream={}, group={}, recordId={}",
+                log.warn("[PEL Recovery] 🔄 PEL orphan check failed; pending reference was retained. "
+                                + "stream={}, group={}, recordId={}",
                         streamKey, group, attemptedId.getValue(), e);
             }
         }

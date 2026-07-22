@@ -58,14 +58,14 @@ public class PaymentController {
             eventDO = this.createEvent(parsedEvent, storageRef);
             return FuiouResponse.ok();
         } catch (StorageWriteException e) {
-            log.warn("storage write failed", e);
+            log.error("[Storage] ❌ Payment payload persistence failed; the request was rejected.", e);
             return FuiouResponse.fail(ErrorCode.DATA_CREATE_ERROR.getMessage());
         } catch (BusinessException e) {
             this.recordEventFailure(storageRef, failureStage, parsedEvent, e);
             return FuiouResponse.fail(e.getMessage());
         } catch (Exception e) {
             this.recordEventFailure(storageRef, failureStage, parsedEvent, e);
-            log.error("store push exception, msg:{}", e.getMessage(), e);
+            log.error("[Ingress] ❌ Payment push processing failed. reason={}", e.getMessage(), e);
             return FuiouResponse.fail(ErrorCode.SYSTEM_ERROR.getMessage());
         } finally {
             this.publishPaymentEvent(eventDO);
@@ -108,7 +108,7 @@ public class PaymentController {
                     SourceSystem.FUIOU.getCode(), ContentType.PAYMENT.getCode(), storageRef,
                     failureStage, parsedEvent, failure);
         } catch (Exception auditException) {
-            log.error("record payment event ingest failure failed, storageId={}",
+            log.error("[Ingress Audit] ❌ Payment ingest failure could not be recorded. storageId={}",
                     storageRef.storageId(), auditException);
         }
     }
@@ -118,7 +118,8 @@ public class PaymentController {
             try {
                 eventDeliveryService.deliverPaymentEvent(eventDO);
             } catch (Exception e) {
-                log.warn("stream publish failed, eventId={}", eventDO.getId(), e);
+                log.error("[Redis Stream] ❌ Payment publish orchestration failed; the persisted event remains "
+                        + "available for recovery. eventId={}", eventDO.getId(), e);
             }
         }
     }

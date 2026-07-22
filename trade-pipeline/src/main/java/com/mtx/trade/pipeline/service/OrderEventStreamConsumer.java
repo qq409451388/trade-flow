@@ -75,7 +75,8 @@ public class OrderEventStreamConsumer {
             if (isNoGroup(e)) {
                 groupReady = false;
             }
-            log.error("read order event stream failed, stream={}", properties.getStreamKey(), e);
+            log.error("[Stream Consumer] ❌ Order Stream read failed; polling will retry. stream={}",
+                    properties.getStreamKey(), e);
         }
     }
 
@@ -111,14 +112,19 @@ public class OrderEventStreamConsumer {
                     claimIds.toArray(RecordId[]::new));
             List<MapRecord<String, Object, Object>> claimedRecords =
                     claimed == null ? Collections.emptyList() : claimed;
+            log.info("[PEL Recovery] 🔄 Reclaiming order pending messages. requested={}, reclaimed={}, group={}",
+                    claimIds.size(), claimedRecords.size(), properties.getGroup());
             process(claimedRecords, true);
             pelOrphanCleaner.clean(
                     properties.getStreamKey(), properties.getGroup(), claimIds, claimedRecords);
+            log.info("[PEL Recovery] ✅ Order reclaim batch completed. requested={}, reclaimed={}, group={}",
+                    claimIds.size(), claimedRecords.size(), properties.getGroup());
         } catch (Exception e) {
             if (isNoGroup(e)) {
                 groupReady = false;
             }
-            log.error("reclaim order event PEL failed, stream={}, group={}",
+            log.error("[PEL Recovery] ❌ Order pending-message reclaim failed; entries remain recoverable. "
+                            + "stream={}, group={}",
                     properties.getStreamKey(), properties.getGroup(), e);
         }
     }
@@ -161,7 +167,8 @@ public class OrderEventStreamConsumer {
             processLogId = processLogService.recordSuccess(
                     event, recordId, triggerType, result, startedTime, startedNanos);
         } catch (Exception e) {
-            log.error("record successful order event attempt failed; message remains pending, "
+            log.error("[Processing Audit] ❌ Successful order processing could not be recorded; message remains "
+                            + "in PEL. "
                             + "recordId={}, eventId={}, storageId={}, eventKey={}",
                     recordId, event.eventId(), event.storageId(), event.eventKey(), e);
             return;
@@ -171,7 +178,7 @@ public class OrderEventStreamConsumer {
             ingressEventAckClient.ack(event.contentType(), event.eventId());
         } catch (Exception e) {
             recordIngressAckFailure(processLogId, e);
-            log.error("order persisted but Ingress ACK failed; message remains pending, "
+            log.error("[Ingress ACK] ❌ Order was persisted but Ingress ACK failed; message remains in PEL. "
                             + "recordId={}, eventId={}, storageId={}, eventKey={}",
                     recordId, event.eventId(), event.storageId(), event.eventKey(), e);
             return;
@@ -179,13 +186,15 @@ public class OrderEventStreamConsumer {
         try {
             processLogService.recordIngressAck(processLogId, true);
         } catch (Exception e) {
-            log.error("record successful order Ingress ACK failed; message remains pending, "
+            log.error("[Processing Audit] ❌ Successful order Ingress ACK could not be recorded; message remains "
+                            + "in PEL. "
                             + "processLogId={}, recordId={}, eventId={}",
                     processLogId, recordId, event.eventId(), e);
             return;
         }
         acknowledge(record, processLogId);
-        log.info("order event processed, recordId={}, eventId={}, storageId={}, eventKey={}, result={}, reclaimed={}",
+        log.debug("[Stream Consumer] ✅ Order event completed. recordId={}, eventId={}, storageId={}, "
+                        + "eventKey={}, result={}, reclaimed={}",
                 recordId, event.eventId(), event.storageId(), event.eventKey(), result, reclaimed);
     }
 
@@ -204,12 +213,14 @@ public class OrderEventStreamConsumer {
             processLogId = processLogService.recordFailure(
                     event, recordId, triggerType, stage, failure, startedTime, startedNanos);
         } catch (Exception logFailure) {
-            log.error("record failed order event attempt failed; message remains pending, recordId={}, eventId={}",
+            log.error("[Processing Audit] ❌ Order failure could not be recorded; message remains in PEL. "
+                            + "recordId={}, eventId={}",
                     recordId, event == null ? null : event.eventId(), logFailure);
             return;
         }
         acknowledge(record, processLogId);
-        log.error("order event processing failed and Redis delivery was acknowledged; Ingress remains unacked, "
+        log.error("[Stream Consumer] ❌ Order processing failed; Redis delivery was acknowledged and Ingress "
+                        + "remains unacknowledged for recovery. "
                         + "recordId={}, eventId={}, stage={}, reclaimed={}",
                 recordId, event == null ? null : event.eventId(), stage, reclaimed, failure);
     }
@@ -221,13 +232,14 @@ public class OrderEventStreamConsumer {
                     properties.getStreamKey(), properties.getGroup(), record.getId());
             succeeded = true;
         } catch (Exception e) {
-            log.error("Redis XACK failed; record remains recoverable in PEL, recordId={}",
+            log.error("[Redis XACK] ❌ Order XACK failed; record remains recoverable in PEL. recordId={}",
                     record.getId().getValue(), e);
         } finally {
             try {
                 processLogService.recordRedisXack(processLogId, succeeded);
             } catch (Exception e) {
-                log.error("record order Redis XACK status failed, processLogId={}, recordId={}",
+                log.error("[Processing Audit] ❌ Order XACK status could not be recorded. "
+                                + "processLogId={}, recordId={}",
                         processLogId, record.getId().getValue(), e);
             }
         }
@@ -240,7 +252,8 @@ public class OrderEventStreamConsumer {
         try {
             redisTemplate.opsForStream().delete(properties.getStreamKey(), record.getId());
         } catch (Exception e) {
-            log.warn("delete acknowledged order Stream record failed; MAXLEN remains as fallback, recordId={}",
+            log.warn("[Redis Stream] 🔄 Acknowledged order record could not be deleted; MAXLEN remains the "
+                            + "cleanup fallback. recordId={}",
                     record.getId().getValue(), e);
         }
     }
@@ -267,7 +280,7 @@ public class OrderEventStreamConsumer {
             try {
                 redisTemplate.opsForStream().createGroup(
                         properties.getStreamKey(), ReadOffset.from("0-0"), properties.getGroup());
-                log.info("order event consumer group created, stream={}, group={}",
+                log.info("[Stream Consumer] ✅ Order consumer group is ready. stream={}, group={}",
                         properties.getStreamKey(), properties.getGroup());
             } catch (Exception e) {
                 if (!isBusyGroup(e)) {
@@ -277,7 +290,8 @@ public class OrderEventStreamConsumer {
             groupReady = true;
             return true;
         } catch (Exception e) {
-            log.error("initialize order event consumer group failed, stream={}, group={}",
+            log.error("[Stream Consumer] ❌ Order consumer group initialization failed; consumption is paused. "
+                            + "stream={}, group={}",
                     properties.getStreamKey(), properties.getGroup(), e);
             return false;
         } finally {
@@ -285,7 +299,8 @@ public class OrderEventStreamConsumer {
                 try {
                     redisTemplate.opsForStream().delete(properties.getStreamKey(), initRecordId);
                 } catch (Exception e) {
-                    log.warn("delete order stream init record failed, recordId={}", initRecordId, e);
+                    log.warn("[Redis Stream] 🔄 Order initialization record cleanup failed; MAXLEN remains the "
+                            + "fallback. recordId={}", initRecordId, e);
                 }
             }
         }

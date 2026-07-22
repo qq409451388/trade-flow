@@ -27,11 +27,15 @@ public class EventAckController {
             eventAckService.ack(
                     command == null ? null : command.contentType(),
                     command == null ? null : command.eventId());
+            log.debug("[Ingress ACK] ✅ Event acknowledged by Pipeline. contentType={}, eventId={}",
+                    command == null ? null : command.contentType(),
+                    command == null ? null : command.eventId());
             return ResponseData.success("acked");
         } catch (BusinessException e) {
             return ResponseData.fail(e.getCode(), e.getMessage(), null);
         } catch (Exception e) {
-            log.error("event ACK failed, command={}", command, e);
+            log.error("[Ingress ACK] ❌ Event acknowledgement failed; the event remains unacknowledged. "
+                    + "command={}", command, e);
             return ResponseData.fail(ErrorCode.SYSTEM_ERROR);
         }
     }

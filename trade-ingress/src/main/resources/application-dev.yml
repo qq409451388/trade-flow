@@ -33,7 +33,7 @@ trade:
       secret: rFXFhj8Z6GA96NQDqgg3N4djE0Dp54nj
   storage:
     local:
-      sql-show: true
+      sql-show: false
     datasource:  # 表示与上面共用
       url: ${spring.datasource.url}
       username: ${spring.datasource.username}

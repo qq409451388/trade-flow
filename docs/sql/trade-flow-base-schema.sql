@@ -100,6 +100,8 @@ CREATE TABLE `trade_event_delivery_control` (
   `opened_time` DATETIME(3) NULL COMMENT '最近进入OPEN时间',
   `next_health_check_time` DATETIME(3) NULL COMMENT '下次允许探活时间',
   `health_success_count` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'OPEN状态连续健康次数',
+  `pipeline_failure_count` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'CLOSED状态Pipeline连续不可用次数',
+  `probe_event_id` BIGINT NULL COMMENT 'HALF_OPEN等待ACK的探测event ID',
   `last_failure_time` DATETIME(3) NULL COMMENT '最近失败时间',
   `last_failure_reason` VARCHAR(1024) NULL COMMENT '最近失败原因',
   `recovery_owner` VARCHAR(64) NULL COMMENT '当前探活或积压恢复实例',
@@ -116,8 +118,8 @@ CREATE TABLE `trade_event_delivery_control` (
   COMMENT='Ingress Redis Stream投递熔断持久化状态';
 
 INSERT INTO `trade_event_delivery_control`
-  (`content_type`, `circuit_status`, `failure_count`, `health_success_count`,
+  (`content_type`, `circuit_status`, `failure_count`, `health_success_count`, `pipeline_failure_count`,
    `recovery_cursor_id`, `recovery_cutoff_id`, `version`)
 VALUES
-  (1, 0, 0, 0, 0, 0, 0),
-  (2, 0, 0, 0, 0, 0, 0);
+  (1, 0, 0, 0, 0, 0, 0, 0),
+  (2, 0, 0, 0, 0, 0, 0, 0);

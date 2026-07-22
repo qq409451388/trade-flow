@@ -89,7 +89,8 @@ public class EventDeliveryCircuitBreaker {
         control.setLastFailureReason(reason(failure));
         if (control.getFailureCount() >= Math.max(1, properties.getFailureThreshold())) {
             open(control, now, failure);
-            log.error("event delivery circuit opened, contentType={}, failures={}, windowStart={}",
+            log.error("[Circuit Breaker] ❌ Redis publishing failed repeatedly; circuit is now OPEN. "
+                            + "contentType={}, failures={}, windowStart={}",
                     contentType, control.getFailureCount(), control.getFailureWindowStart());
         }
         save(control);
@@ -101,7 +102,20 @@ public class EventDeliveryCircuitBreaker {
         }
         LocalDateTime now = LocalDateTime.now();
         return controlDbService.list(new LambdaQueryWrapper<EventDeliveryControlDO>()
-                .eq(EventDeliveryControlDO::getCircuitStatus, DeliveryCircuitStatus.OPEN.getCode())
+                .in(EventDeliveryControlDO::getCircuitStatus,
+                        DeliveryCircuitStatus.OPEN.getCode(), DeliveryCircuitStatus.HALF_OPEN.getCode())
+                .and(wrapper -> wrapper.isNull(EventDeliveryControlDO::getNextHealthCheckTime)
+                        .or().le(EventDeliveryControlDO::getNextHealthCheckTime, now)));
+    }
+
+    /** CLOSED 通道也必须探测消费端，否则 Redis 正常而 Pipeline 宕机时永远不会触发熔断。 */
+    public List<EventDeliveryControlDO> listClosedForHealthCheck() {
+        if (!properties.isEnabled()) {
+            return List.of();
+        }
+        LocalDateTime now = LocalDateTime.now();
+        return controlDbService.list(new LambdaQueryWrapper<EventDeliveryControlDO>()
+                .eq(EventDeliveryControlDO::getCircuitStatus, DeliveryCircuitStatus.CLOSED.getCode())
                 .and(wrapper -> wrapper.isNull(EventDeliveryControlDO::getNextHealthCheckTime)
                         .or().le(EventDeliveryControlDO::getNextHealthCheckTime, now)));
     }
@@ -129,6 +143,40 @@ public class EventDeliveryCircuitBreaker {
     }
 
     @Transactional(transactionManager = "ingressTransactionManager", rollbackFor = Exception.class)
+    public void recordClosedPipelineReady(int contentType) {
+        EventDeliveryControlDO control = locked(contentType);
+        if (control.getCircuitStatus() != DeliveryCircuitStatus.CLOSED.getCode()
+                || !recoveryOwner.equals(control.getRecoveryOwner())) {
+            return;
+        }
+        control.setPipelineFailureCount(0);
+        scheduleNextCheckAndRelease(control);
+        save(control);
+    }
+
+    @Transactional(transactionManager = "ingressTransactionManager", rollbackFor = Exception.class)
+    public void recordClosedPipelineFailure(int contentType, Throwable failure) {
+        EventDeliveryControlDO control = locked(contentType);
+        if (control.getCircuitStatus() != DeliveryCircuitStatus.CLOSED.getCode()
+                || !recoveryOwner.equals(control.getRecoveryOwner())) {
+            return;
+        }
+        int failures = value(control.getPipelineFailureCount()) + 1;
+        control.setPipelineFailureCount(failures);
+        control.setLastFailureTime(LocalDateTime.now());
+        control.setLastFailureReason(reason(failure));
+        if (failures >= Math.max(1, properties.getPipelineFailureThreshold())) {
+            open(control, LocalDateTime.now(), failure);
+            log.error("[Circuit Breaker] ❌ Pipeline is unavailable; circuit is now OPEN. "
+                            + "contentType={}, consecutiveFailures={}",
+                    contentType, failures);
+        } else {
+            scheduleNextCheckAndRelease(control);
+        }
+        save(control);
+    }
+
+    @Transactional(transactionManager = "ingressTransactionManager", rollbackFor = Exception.class)
     public boolean recordHealthSuccess(int contentType) {
         EventDeliveryControlDO control = locked(contentType);
         if (control.getCircuitStatus() != DeliveryCircuitStatus.OPEN.getCode()
@@ -139,9 +187,11 @@ public class EventDeliveryCircuitBreaker {
         control.setHealthSuccessCount(successes);
         if (successes >= Math.max(1, properties.getHealthSuccessThreshold())) {
             control.setCircuitStatus(DeliveryCircuitStatus.HALF_OPEN.getCode());
+            control.setProbeEventId(null);
             control.setRecoveryLeaseUntil(LocalDateTime.now().plus(properties.getRecoveryLease()));
             save(control);
-            log.info("event delivery circuit entered HALF_OPEN, contentType={}", contentType);
+            log.warn("[Circuit Breaker] 🔄 Dependencies are healthy; circuit is HALF_OPEN and waiting for "
+                    + "a probe ACK. contentType={}", contentType);
             return true;
         }
         control.setNextHealthCheckTime(LocalDateTime.now().plus(properties.getHealthCheckDelay()));
@@ -179,13 +229,28 @@ public class EventDeliveryCircuitBreaker {
         control.setOpenedTime(null);
         control.setNextHealthCheckTime(null);
         control.setHealthSuccessCount(0);
+        control.setPipelineFailureCount(0);
+        control.setProbeEventId(null);
         control.setRecoveryOwner(null);
         control.setRecoveryLeaseUntil(null);
         control.setRecoveryCursorId(0L);
         control.setRecoveryCutoffId(Math.max(0L, recoveryCutoffId));
         save(control);
-        log.info("event delivery circuit closed after probe, contentType={}, recoveryCutoffId={}",
+        log.info("[Circuit Breaker] ✅ Probe was acknowledged; circuit has recovered and is CLOSED. "
+                        + "contentType={}, recoveryCutoffId={}",
                 contentType, recoveryCutoffId);
+    }
+
+    @Transactional(transactionManager = "ingressTransactionManager", rollbackFor = Exception.class)
+    public void waitForProbeAck(int contentType, Long probeEventId) {
+        EventDeliveryControlDO control = locked(contentType);
+        if (control.getCircuitStatus() != DeliveryCircuitStatus.HALF_OPEN.getCode()
+                || !recoveryOwner.equals(control.getRecoveryOwner())) {
+            return;
+        }
+        control.setProbeEventId(probeEventId);
+        scheduleNextCheckAndRelease(control);
+        save(control);
     }
 
     @Transactional(transactionManager = "ingressTransactionManager", rollbackFor = Exception.class)
@@ -193,7 +258,8 @@ public class EventDeliveryCircuitBreaker {
         EventDeliveryControlDO control = locked(contentType);
         open(control, LocalDateTime.now(), failure);
         save(control);
-        log.error("event delivery circuit reopened after probe failure, contentType={}", contentType, failure);
+        log.error("[Circuit Breaker] ❌ Half-open probe failed; circuit returned to OPEN. contentType={}",
+                contentType, failure);
     }
 
     @Transactional(transactionManager = "ingressTransactionManager", rollbackFor = Exception.class)
@@ -245,6 +311,8 @@ public class EventDeliveryCircuitBreaker {
         control.setCircuitStatus(DeliveryCircuitStatus.CLOSED.getCode());
         control.setFailureCount(0);
         control.setHealthSuccessCount(0);
+        control.setPipelineFailureCount(0);
+        control.setProbeEventId(null);
         control.setRecoveryCursorId(0L);
         control.setRecoveryCutoffId(0L);
         control.setVersion(0);
@@ -273,6 +341,7 @@ public class EventDeliveryCircuitBreaker {
         control.setOpenedTime(now);
         control.setNextHealthCheckTime(now.plus(properties.getHealthCheckDelay()));
         control.setHealthSuccessCount(0);
+        control.setProbeEventId(null);
         control.setLastFailureTime(now);
         control.setLastFailureReason(reason(failure));
         control.setRecoveryOwner(null);
@@ -291,6 +360,8 @@ public class EventDeliveryCircuitBreaker {
                 .set(EventDeliveryControlDO::getOpenedTime, control.getOpenedTime())
                 .set(EventDeliveryControlDO::getNextHealthCheckTime, control.getNextHealthCheckTime())
                 .set(EventDeliveryControlDO::getHealthSuccessCount, control.getHealthSuccessCount())
+                .set(EventDeliveryControlDO::getPipelineFailureCount, control.getPipelineFailureCount())
+                .set(EventDeliveryControlDO::getProbeEventId, control.getProbeEventId())
                 .set(EventDeliveryControlDO::getLastFailureTime, control.getLastFailureTime())
                 .set(EventDeliveryControlDO::getLastFailureReason, control.getLastFailureReason())
                 .set(EventDeliveryControlDO::getRecoveryOwner, control.getRecoveryOwner())
@@ -302,6 +373,12 @@ public class EventDeliveryCircuitBreaker {
             throw new BusinessException(ErrorCode.DATA_CREATE_ERROR, "事件投递熔断状态更新失败");
         }
         cache.remove(control.getContentType());
+    }
+
+    private void scheduleNextCheckAndRelease(EventDeliveryControlDO control) {
+        control.setNextHealthCheckTime(LocalDateTime.now().plus(properties.getHealthCheckDelay()));
+        control.setRecoveryOwner(null);
+        control.setRecoveryLeaseUntil(null);
     }
 
     private static int value(Integer value) {

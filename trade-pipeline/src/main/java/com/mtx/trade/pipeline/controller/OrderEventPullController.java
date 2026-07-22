@@ -31,7 +31,7 @@ public class OrderEventPullController {
         } catch (BusinessException e) {
             return ResponseData.fail(e.getCode(), e.getMessage(), null);
         } catch (Exception e) {
-            log.error("actively pull exhausted order events failed", e);
+            log.error("[Exhausted Event Pull] ❌ Manual order pull request failed.", e);
             return ResponseData.fail(ErrorCode.SYSTEM_ERROR);
         }
     }

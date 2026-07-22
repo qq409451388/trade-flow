@@ -54,7 +54,8 @@ public class EventStreamPublisher {
         fields.put("messageVersion", String.valueOf(eventDO.getMessageVersion()));
 
         addWithBoundedLength(properties.getOrderEventKey(), fields);
-        log.info("order event published, stream={}, eventId={}, storageId={}",
+        // 成功发布的debug级别
+        log.debug("[Redis Stream] ✅ Order event published. stream={}, eventId={}, storageId={}",
                 properties.getOrderEventKey(), eventDO.getId(), eventDO.getRawId());
     }
 
@@ -69,7 +70,7 @@ public class EventStreamPublisher {
         fields.put("messageVersion", String.valueOf(eventDO.getMessageVersion()));
 
         addWithBoundedLength(properties.getPaymentEventKey(), fields);
-        log.info("payment event published, stream={}, eventId={}, storageId={}",
+        log.debug("[Redis Stream] ✅ Payment event published. stream={}, eventId={}, storageId={}",
                 properties.getPaymentEventKey(), eventDO.getId(), eventDO.getRawId());
     }
 
