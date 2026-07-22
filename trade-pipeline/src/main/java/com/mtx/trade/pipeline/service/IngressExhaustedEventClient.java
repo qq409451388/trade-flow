@@ -36,7 +36,8 @@ public class IngressExhaustedEventClient {
         this.properties = properties;
     }
 
-    public List<IngressExhaustedEvent> list(int contentType, List<Long> eventIds, int limit) {
+    public List<IngressExhaustedEvent> list(
+            int contentType, List<Long> eventIds, int limit, long afterEventId) {
         if (contentType != ContentType.ORDER.getCode() && contentType != ContentType.PAYMENT.getCode()) {
             throw new BusinessException(ErrorCode.PARAM_INVALID, "不支持的事件类型: " + contentType);
         }
@@ -46,6 +47,8 @@ public class IngressExhaustedEventClient {
                 .queryParam("limit", limit);
         if (eventIds != null && !eventIds.isEmpty()) {
             uriBuilder.queryParam("eventIds", eventIds.toArray());
+        } else if (afterEventId > 0) {
+            uriBuilder.queryParam("afterEventId", afterEventId);
         }
         ResponseData<List<IngressExhaustedEvent>> response = restClient.get()
                 .uri(uriBuilder.build(true).toUri())

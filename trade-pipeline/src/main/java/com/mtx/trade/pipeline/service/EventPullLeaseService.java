@@ -38,6 +38,17 @@ public class EventPullLeaseService {
                 .set(EventPullControlDO::getLeaseUntil, null));
     }
 
+    /** 当前持有者续租；失败表示租约已丢失，本轮必须停止继续取新批次。 */
+    public boolean renew(int contentType) {
+        long leaseSeconds = leaseSeconds(properties.getLeaseDuration());
+        return controlDbService.update(new LambdaUpdateWrapper<EventPullControlDO>()
+                .eq(EventPullControlDO::getContentType, contentType)
+                .eq(EventPullControlDO::getLeaseOwner, owner)
+                .apply("lease_until > CURRENT_TIMESTAMP(3)")
+                .setSql("lease_until = DATE_ADD(CURRENT_TIMESTAMP(3), INTERVAL "
+                        + leaseSeconds + " SECOND)"));
+    }
+
     private static long leaseSeconds(Duration duration) {
         if (duration == null || duration.isZero() || duration.isNegative()) {
             throw new IllegalArgumentException("主动拉取租约时长必须为正数");

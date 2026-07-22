@@ -68,7 +68,10 @@ trade:
       enabled: true
       initial-delay-ms: 60000
       fixed-delay-ms: 60000
-      batch-size: 100
+      batch-size: 500
+      max-batches-per-run: 100
+      parallelism: 4
+      max-run-duration: 10m
       lease-duration: 15m
     fuiou-order:
       zone-id: Asia/Shanghai

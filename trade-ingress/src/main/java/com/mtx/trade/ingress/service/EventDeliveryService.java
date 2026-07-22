@@ -80,17 +80,23 @@ public class EventDeliveryService {
     }
 
     /** 查询自动补发已耗尽、等待人工处理的事件。 */
-    public List<EventDeliveryVO> listExhausted(Integer contentType, int limit, List<Long> eventIds) {
+    public List<EventDeliveryVO> listExhausted(
+            Integer contentType, int limit, List<Long> eventIds, long afterEventId) {
         validateContentType(contentType);
+        if (afterEventId < 0 || (afterEventId > 0 && eventIds != null && !eventIds.isEmpty())) {
+            throw new BusinessException(ErrorCode.PARAM_INVALID, "afterEventId无效或不能与eventIds同时使用");
+        }
         int queryLimit = Math.max(1, Math.min(limit, 500));
         if (contentType == ContentType.ORDER.getCode()) {
             LambdaQueryWrapper<OrderEventDO> wrapper = new LambdaQueryWrapper<OrderEventDO>()
                     .eq(OrderEventDO::getAcked, EventAckStatus.INIT.getCode())
                     .ge(OrderEventDO::getAutoRedeliveryCount, maxAutoRedeliveries())
-                    .orderByAsc(OrderEventDO::getCreateTime, OrderEventDO::getId)
+                    .orderByAsc(OrderEventDO::getId)
                     .last("LIMIT " + queryLimit);
             if (eventIds != null && !eventIds.isEmpty()) {
                 wrapper.in(OrderEventDO::getId, eventIds);
+            } else if (afterEventId > 0) {
+                wrapper.gt(OrderEventDO::getId, afterEventId);
             }
             return orderEventDbService.list(wrapper)
                     .stream().map(this::toDeliveryVO).toList();
@@ -98,10 +104,12 @@ public class EventDeliveryService {
         LambdaQueryWrapper<PaymentEventDO> wrapper = new LambdaQueryWrapper<PaymentEventDO>()
                 .eq(PaymentEventDO::getAcked, EventAckStatus.INIT.getCode())
                 .ge(PaymentEventDO::getAutoRedeliveryCount, maxAutoRedeliveries())
-                .orderByAsc(PaymentEventDO::getCreateTime, PaymentEventDO::getId)
+                .orderByAsc(PaymentEventDO::getId)
                 .last("LIMIT " + queryLimit);
         if (eventIds != null && !eventIds.isEmpty()) {
             wrapper.in(PaymentEventDO::getId, eventIds);
+        } else if (afterEventId > 0) {
+            wrapper.gt(PaymentEventDO::getId, afterEventId);
         }
         return paymentEventDbService.list(wrapper)
                 .stream().map(this::toDeliveryVO).toList();

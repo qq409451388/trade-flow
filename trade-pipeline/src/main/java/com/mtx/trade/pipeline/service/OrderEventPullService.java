@@ -4,22 +4,23 @@ import com.mtx.trade.common.enums.ErrorCode;
 import com.mtx.trade.common.exception.BusinessException;
 import com.mtx.trade.pipeline.dto.IngressExhaustedEvent;
 import com.mtx.trade.common.enums.ContentType;
+import com.mtx.trade.pipeline.config.EventConsumerConfiguration;
 import com.mtx.trade.pipeline.dto.OrderEventMessage;
 import com.mtx.trade.pipeline.dto.OrderEventPullCommand;
 import com.mtx.trade.pipeline.dto.OrderEventPullResult;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
-import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 
 /** Pipeline 主动拉取并直接处理 Ingress 投递耗尽事件，不经过 Redis。 */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class OrderEventPullService {
 
     private static final int MAX_BATCH_SIZE = 500;
@@ -28,17 +29,33 @@ public class OrderEventPullService {
     private final OrderEventHandler orderEventHandler;
     private final OrderEventProcessLogService processLogService;
     private final IngressEventAckClient ingressEventAckClient;
+    private final Executor exhaustedPullWorkerExecutor;
+
+    public OrderEventPullService(
+            IngressExhaustedEventClient exhaustedEventClient,
+            OrderEventHandler orderEventHandler,
+            OrderEventProcessLogService processLogService,
+            IngressEventAckClient ingressEventAckClient,
+            @Qualifier(EventConsumerConfiguration.EXHAUSTED_PULL_WORKER_EXECUTOR)
+            Executor exhaustedPullWorkerExecutor) {
+        this.exhaustedEventClient = exhaustedEventClient;
+        this.orderEventHandler = orderEventHandler;
+        this.processLogService = processLogService;
+        this.ingressEventAckClient = ingressEventAckClient;
+        this.exhaustedPullWorkerExecutor = exhaustedPullWorkerExecutor;
+    }
 
     public List<OrderEventPullResult> pull(OrderEventPullCommand command) {
         List<Long> eventIds = validateEventIds(command == null ? null : command.eventIds());
         int limit = normalizeLimit(command == null ? null : command.limit(), eventIds);
+        long afterEventId = normalizeAfterEventId(command == null ? null : command.afterEventId(), eventIds);
         List<IngressExhaustedEvent> events = exhaustedEventClient.list(
-                ContentType.ORDER.getCode(), eventIds, limit);
-        List<OrderEventPullResult> results = new ArrayList<>(events.size());
-        for (IngressExhaustedEvent source : events) {
-            results.add(processOne(source));
-        }
-        return results;
+                ContentType.ORDER.getCode(), eventIds, limit, afterEventId);
+        List<CompletableFuture<OrderEventPullResult>> futures = events.stream()
+                .map(source -> CompletableFuture.supplyAsync(
+                        () -> processOne(source), exhaustedPullWorkerExecutor))
+                .toList();
+        return futures.stream().map(CompletableFuture::join).toList();
     }
 
     private OrderEventPullResult processOne(IngressExhaustedEvent source) {
@@ -135,5 +152,13 @@ public class OrderEventPullService {
             throw new BusinessException(ErrorCode.PARAM_INVALID, "limit必须在1至500之间");
         }
         return limit;
+    }
+
+    private static long normalizeAfterEventId(Long afterEventId, List<Long> eventIds) {
+        long normalized = afterEventId == null ? 0L : afterEventId;
+        if (normalized < 0 || (normalized > 0 && eventIds != null && !eventIds.isEmpty())) {
+            throw new BusinessException(ErrorCode.PARAM_INVALID, "afterEventId无效或不能与eventIds同时使用");
+        }
+        return normalized;
     }
 }

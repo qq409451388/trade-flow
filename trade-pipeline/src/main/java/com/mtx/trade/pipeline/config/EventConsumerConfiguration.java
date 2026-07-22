@@ -34,6 +34,7 @@ public class EventConsumerConfiguration {
     public static final String ORDER_PEL_SCHEDULER = "orderPelTaskScheduler";
     public static final String PAYMENT_PEL_SCHEDULER = "paymentPelTaskScheduler";
     public static final String EXHAUSTED_PULL_SCHEDULER = "exhaustedPullTaskScheduler";
+    public static final String EXHAUSTED_PULL_WORKER_EXECUTOR = "exhaustedPullWorkerExecutor";
 
     @Bean(name = ORDER_STREAM_EXECUTOR)
     @ConditionalOnProperty(prefix = "trade.pipeline.order-event-consumer",
@@ -106,6 +107,23 @@ public class EventConsumerConfiguration {
     @Bean(name = EXHAUSTED_PULL_SCHEDULER)
     public ThreadPoolTaskScheduler exhaustedPullTaskScheduler() {
         return scheduler(2, "pipeline-exhausted-pull-");
+    }
+
+    @Bean(name = EXHAUSTED_PULL_WORKER_EXECUTOR)
+    public ThreadPoolTaskExecutor exhaustedPullWorkerExecutor(ExhaustedEventPullProperties properties) {
+        int parallelism = properties.getParallelism();
+        if (parallelism <= 0 || parallelism > 16) {
+            throw new IllegalArgumentException("trade.pipeline.exhausted-event-pull.parallelism 必须为1~16");
+        }
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(parallelism);
+        executor.setMaxPoolSize(parallelism);
+        executor.setQueueCapacity(1000);
+        executor.setRejectedExecutionHandler(new java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy());
+        executor.setThreadNamePrefix("pipeline-exhausted-worker-");
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(30);
+        return executor;
     }
 
     private static StreamMessageListenerContainer<String, MapRecord<String, String, String>> createContainer(

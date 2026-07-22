@@ -30,10 +30,12 @@ public class EventDeliveryController {
     public ResponseData<List<EventDeliveryVO>> redeliveryExhausted(
             @RequestParam Integer contentType,
             @RequestParam(defaultValue = "100") Integer limit,
-            @RequestParam(required = false) List<Long> eventIds) {
+            @RequestParam(required = false) List<Long> eventIds,
+            @RequestParam(defaultValue = "0") Long afterEventId) {
         try {
             return ResponseData.success(eventDeliveryService.listExhausted(
-                    contentType, limit == null ? 100 : limit, eventIds));
+                    contentType, limit == null ? 100 : limit, eventIds,
+                    afterEventId == null ? 0L : afterEventId));
         } catch (BusinessException e) {
             return ResponseData.fail(e.getCode(), e.getMessage(), null);
         } catch (Exception e) {
