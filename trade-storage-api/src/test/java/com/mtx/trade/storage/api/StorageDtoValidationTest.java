@@ -11,6 +11,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class StorageDtoValidationTest {
 
     @Test
+    void shouldRejectNullStorageContent() {
+        assertMessageContains(
+                assertThrows(IllegalArgumentException.class,
+                        () -> new StorageWriteCommand(1, 1, null, LocalDateTime.now())),
+                "content");
+    }
+
+    @Test
     void shouldRejectInvalidStorageReference() {
         assertMessageContains(
                 assertThrows(IllegalArgumentException.class,

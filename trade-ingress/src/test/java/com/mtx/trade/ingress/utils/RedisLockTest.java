@@ -37,6 +37,22 @@ class RedisLockTest {
                 .hasMessageContaining("Redis unavailable while acquiring lock");
     }
 
+    @Test
+    void shouldPreserveCauseWhenBlockingAcquireFails() {
+        IllegalStateException redisFailure = new IllegalStateException("redis unavailable");
+        @SuppressWarnings("unchecked")
+        ValueOperations<String, String> valueOperations = mock(ValueOperations.class);
+        when(valueOperations.setIfAbsent(anyString(), anyString(), any(Duration.class)))
+                .thenThrow(redisFailure);
+        RedisLock redisLock = new RedisLock(redisTemplate(valueOperations));
+
+        assertThatThrownBy(() -> redisLock.acquireLock(
+                "job", Duration.ofSeconds(1), Duration.ofSeconds(1)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Redis unavailable while acquiring lock")
+                .hasCause(redisFailure);
+    }
+
     private static StringRedisTemplate redisTemplateReturning(boolean result) {
         @SuppressWarnings("unchecked")
         ValueOperations<String, String> valueOperations = mock(ValueOperations.class);

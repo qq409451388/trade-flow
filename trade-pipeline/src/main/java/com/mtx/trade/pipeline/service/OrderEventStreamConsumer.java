@@ -41,6 +41,7 @@ public class OrderEventStreamConsumer {
     private final OrderEventHandler orderEventHandler;
     private final IngressEventAckClient ingressEventAckClient;
     private final OrderEventProcessLogService processLogService;
+    private final PelOrphanCleaner pelOrphanCleaner;
 
     private volatile boolean groupReady;
 
@@ -108,7 +109,11 @@ public class OrderEventStreamConsumer {
                     properties.getConsumerName(),
                     properties.getPendingMinIdle(),
                     claimIds.toArray(RecordId[]::new));
-            process(claimed == null ? Collections.emptyList() : claimed, true);
+            List<MapRecord<String, Object, Object>> claimedRecords =
+                    claimed == null ? Collections.emptyList() : claimed;
+            process(claimedRecords, true);
+            pelOrphanCleaner.clean(
+                    properties.getStreamKey(), properties.getGroup(), claimIds, claimedRecords);
         } catch (Exception e) {
             if (isNoGroup(e)) {
                 groupReady = false;

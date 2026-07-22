@@ -59,6 +59,7 @@ public class RedisLock {
             } while (System.currentTimeMillis() < deadline);
         } catch (Exception exception) {
             log.error("RedisLock error while acquiring key:{}", actualKey, exception);
+            throw new IllegalStateException("Redis unavailable while acquiring lock: " + actualKey, exception);
         }
         throw new RuntimeException("Failed to acquire Redis lock in the program.");
     }

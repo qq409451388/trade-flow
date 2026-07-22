@@ -17,7 +17,10 @@ public record StorageWriteCommand(
         LocalDateTime receivedTime) {
 
     public StorageWriteCommand {
-        content = content == null ? new byte[0] : content.clone();
+        if (content == null) {
+            throw new IllegalArgumentException("content must not be null");
+        }
+        content = content.clone();
     }
 
     @Override

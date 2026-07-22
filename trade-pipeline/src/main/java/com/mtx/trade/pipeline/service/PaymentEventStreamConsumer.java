@@ -38,6 +38,7 @@ public class PaymentEventStreamConsumer {
     private final PaymentEventHandler paymentEventHandler;
     private final IngressEventAckClient ingressEventAckClient;
     private final PaymentEventProcessLogService processLogService;
+    private final PelOrphanCleaner pelOrphanCleaner;
 
     private volatile boolean groupReady;
 
@@ -97,7 +98,11 @@ public class PaymentEventStreamConsumer {
             List<MapRecord<String, Object, Object>> claimed = redisTemplate.opsForStream().claim(
                     properties.getStreamKey(), properties.getGroup(), properties.getConsumerName(),
                     properties.getPendingMinIdle(), claimIds.toArray(RecordId[]::new));
-            process(claimed == null ? Collections.emptyList() : claimed, true);
+            List<MapRecord<String, Object, Object>> claimedRecords =
+                    claimed == null ? Collections.emptyList() : claimed;
+            process(claimedRecords, true);
+            pelOrphanCleaner.clean(
+                    properties.getStreamKey(), properties.getGroup(), claimIds, claimedRecords);
         } catch (Exception e) {
             if (isNoGroup(e)) {
                 groupReady = false;

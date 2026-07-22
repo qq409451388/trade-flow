@@ -73,14 +73,12 @@ public class FuiouOrderParser {
             List<OrderItemDO> items = new ArrayList<>();
             List<OrderItemSpecDO> specs = new ArrayList<>();
             List<OrderPackageItemDO> packageItems = new ArrayList<>();
-            JsonNode detailInfos = root.path("orderDetailInfos");
-            if (!detailInfos.isMissingNode() && !detailInfos.isNull() && !detailInfos.isArray()) {
-                throw invalid("orderDetailInfos 必须是数组");
+            JsonNode detailInfos = root.get("orderDetailInfos");
+            if (detailInfos == null || !detailInfos.isArray()) {
+                throw invalid("完整订单快照的 orderDetailInfos 必须存在且为数组");
             }
-            if (detailInfos.isArray()) {
-                for (JsonNode itemNode : detailInfos) {
-                    parseItem(itemNode, order, items, specs, packageItems);
-                }
+            for (JsonNode itemNode : detailInfos) {
+                parseItem(itemNode, order, items, specs, packageItems);
             }
             return new OrderAggregate(order, items, specs, packageItems, event.messageVersion());
         } catch (BusinessException e) {
