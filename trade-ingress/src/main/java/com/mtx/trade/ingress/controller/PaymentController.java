@@ -3,6 +3,7 @@ package com.mtx.trade.ingress.controller;
 import com.mtx.trade.common.enums.ContentType;
 import com.mtx.trade.common.enums.ErrorCode;
 import com.mtx.trade.common.exception.BusinessException;
+import com.mtx.trade.ingress.common.enums.EventAckStatus;
 import com.mtx.trade.ingress.common.enums.SourceSystem;
 import com.mtx.trade.ingress.dto.EventIngestResult;
 import com.mtx.trade.ingress.dto.FuiouResponse;
@@ -20,6 +21,7 @@ import org.springframework.web.bind.annotation.*;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.HexFormat;
+import java.util.Objects;
 
 @Slf4j
 @RestController
@@ -86,7 +88,8 @@ public class PaymentController {
                 parsedEvent.messageVersion(),
                 storageRef.storageId(),
                 storageRef.sha256());
-        if (ingestResult.accepted()) {
+        if (ingestResult.shouldPublish(event -> Objects.equals(
+                event.getAcked(), EventAckStatus.INIT.getCode()))) {
             eventDO = ingestResult.event();
         }
         return eventDO;
@@ -120,14 +123,4 @@ public class PaymentController {
         }
     }
 
-    private static byte[] parseSha256(String value) {
-        try {
-            if (value == null || value.length() != 64) {
-                throw new IllegalArgumentException("invalid length");
-            }
-            return HexFormat.of().parseHex(value);
-        } catch (IllegalArgumentException e) {
-            throw new BusinessException(ErrorCode.PARAM_INVALID, "storageSha256 必须为64位十六进制字符串");
-        }
-    }
 }

@@ -14,8 +14,12 @@ public interface PaymentEventProcessLogService {
     int STATUS_APPLIED = 1;
     int STATUS_IGNORED = 2;
     int STATUS_FAILED = 3;
+    int DELIVERY_PENDING = 0;
+    int DELIVERY_SUCCEEDED = 1;
+    int DELIVERY_FAILED = 2;
+    int DELIVERY_NOT_APPLICABLE = 3;
 
-    void recordSuccess(
+    long recordSuccess(
             PaymentEventMessage event,
             String streamRecordId,
             int triggerType,
@@ -23,7 +27,7 @@ public interface PaymentEventProcessLogService {
             LocalDateTime startedTime,
             long startedNanos);
 
-    void recordFailure(
+    long recordFailure(
             PaymentEventMessage event,
             String streamRecordId,
             int triggerType,
@@ -31,4 +35,8 @@ public interface PaymentEventProcessLogService {
             Throwable failure,
             LocalDateTime startedTime,
             long startedNanos);
+
+    void recordIngressAck(long processLogId, boolean succeeded);
+
+    void recordRedisXack(long processLogId, boolean succeeded);
 }

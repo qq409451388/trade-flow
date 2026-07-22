@@ -1,5 +1,6 @@
 package com.mtx.trade.pipeline.config;
 
+import com.google.common.collect.BoundType;
 import com.google.common.collect.Range;
 
 import java.sql.Timestamp;
@@ -75,7 +76,46 @@ final class PipelineShardingValueSupport {
         if (range.hasLowerBound() && year < yearOf(range.lowerEndpoint())) {
             return false;
         }
-        return !range.hasUpperBound() || year <= yearOf(range.upperEndpoint());
+        if (!range.hasUpperBound()) {
+            return true;
+        }
+        Object upperEndpoint = range.upperEndpoint();
+        int upperYear = yearOf(upperEndpoint);
+        if (year > upperYear) {
+            return false;
+        }
+        return year != upperYear
+                || range.upperBoundType() == BoundType.CLOSED
+                || !isStartOfYear(upperEndpoint, year);
+    }
+
+    /** OPEN 上界恰好落在元旦零点时，该上界年份与查询范围没有交集。 */
+    private static boolean isStartOfYear(Object value, int year) {
+        if (value instanceof LocalDateTime dateTime) {
+            return dateTime.equals(LocalDate.of(year, 1, 1).atStartOfDay());
+        }
+        if (value instanceof LocalDate date) {
+            return date.equals(LocalDate.of(year, 1, 1));
+        }
+        if (value instanceof Timestamp timestamp) {
+            return isStartOfYear(timestamp.toLocalDateTime(), year);
+        }
+        if (value instanceof java.sql.Date date) {
+            return isStartOfYear(date.toLocalDate(), year);
+        }
+        if (value instanceof OffsetDateTime dateTime) {
+            return isStartOfYear(dateTime.toLocalDateTime(), year);
+        }
+        if (value instanceof ZonedDateTime dateTime) {
+            return isStartOfYear(dateTime.toLocalDateTime(), year);
+        }
+        if (value instanceof Instant instant) {
+            return isStartOfYear(instant.atZone(ZoneId.systemDefault()).toLocalDateTime(), year);
+        }
+        if (value instanceof java.util.Date date) {
+            return isStartOfYear(date.toInstant(), year);
+        }
+        return value instanceof Number && ((Number) value).intValue() == year;
     }
 
     static String requireSingleTarget(Collection<String> availableTargets, String expectedSuffix) {

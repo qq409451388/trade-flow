@@ -40,6 +40,7 @@ public class OrderEventHandler {
             if (content == null || content.length == 0) {
                 throw new BusinessException(ErrorCode.NOT_FOUND, "订单事件关联的 Storage 原文不存在");
             }
+            StorageContentValidator.requireComplete(metadata, content, "订单");
             stage = OrderEventProcessStage.PAYLOAD_PARSE;
             OrderAggregate aggregate = fuiouOrderParser.parse(content, event);
             stage = OrderEventProcessStage.ORDER_PERSIST;

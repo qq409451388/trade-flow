@@ -12,10 +12,19 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
-/** 从富友订单 JSON 原文中提取事件键和消息版本。 */
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.time.format.ResolverStyle;
+
+/** 从富友支付 JSON 原文中提取事件键和消息版本。 */
 @Component
 @RequiredArgsConstructor
 public class FuiouPaymentPayloadParser {
+
+    private static final DateTimeFormatter PAYMENT_TIME_FORMATTER =
+            DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm:ss")
+                    .withResolverStyle(ResolverStyle.STRICT);
 
     private final ObjectMapper objectMapper;
     private final FuiouPaymentPayloadProperties properties;
@@ -28,12 +37,15 @@ public class FuiouPaymentPayloadParser {
             }
             String eventKey = textAt(root, properties.getEventKeyPointer(), "第三方事件键");
             String versionText = textAt(root, properties.getMessageVersionPointer(), "消息版本");
-            long messageVersion = Long.parseLong(versionText);
+            long messageVersion = LocalDateTime.parse(versionText, PAYMENT_TIME_FORMATTER)
+                    .atZone(properties.getZoneId())
+                    .toInstant()
+                    .toEpochMilli();
             if (messageVersion < 0) {
                 throw new NumberFormatException("negative version");
             }
             return new ParsedEventVersion(eventKey, messageVersion);
-        } catch (JsonProcessingException | NumberFormatException e) {
+        } catch (JsonProcessingException | NumberFormatException | DateTimeParseException e) {
             throw new BusinessException(ErrorCode.PARAM_INVALID, "富友报文事件键或消息版本格式错误");
         }
     }

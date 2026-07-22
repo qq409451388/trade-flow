@@ -505,9 +505,11 @@ payment/
   Redis 和支付消费组；该结果参与 Ingress 支付通道熔断恢复。
 - PEL 只处理进程中断以及“业务已落库但审计或 Ingress ACK 尚未完成”的恢复，不承担无限业务重试。
 
-### 13.1 待确认的支付消息版本
+### 13.1 支付消息版本
 
-富友官方文档只定义了字符串 `paySsn`，没有单独的支付消息版本字段。Ingress 当前配置把 `/paySsn`
-同时作为 `thirdEventKey` 和可转换为 `long` 的 `messageVersion`。这只在实际 `paySsn` 始终为非负数字时成立；
-如果富友可能返回字母流水号，需要在 Ingress 层另行确定稳定版本来源，不能在 Pipeline 内用 event ID、接收时间
-或本地 Hash 冒充第三方版本。
+富友官方文档只定义了字符串 `paySsn`，没有单独的支付消息版本字段；实际流水号可能包含字母，不能转换为
+非负 `long`。当前来源 adapter 暂以报文 `payTm` 按 `Asia/Shanghai` 解析后的 epoch milliseconds 作为
+`messageVersion`，`paySsn` 仅作为 `thirdEventKey`。Pipeline 必须用同一时区重新计算并校验版本一致性。
+
+`payTm` 只有秒精度且表达交易时间，这是一项临时来源契约；如果富友后续提供独立、单调的消息版本字段，应直接
+切换到该字段，禁止使用 event ID、接收时间或本地 Hash 冒充第三方版本。

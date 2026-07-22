@@ -209,6 +209,9 @@ public class EventDeliveryService {
     private void scanOrderEvents(LocalDateTime cutoff) {
         long lastId = 0L;
         for (int batch = 0; batch < maxBatches(); batch++) {
+            if (!circuitBreaker.allowNormalPublish(ContentType.ORDER.getCode())) {
+                return;
+            }
             List<OrderEventDO> events = orderEventDbService.list(new LambdaQueryWrapper<OrderEventDO>()
                     .eq(OrderEventDO::getAcked, EventAckStatus.INIT.getCode())
                     .lt(OrderEventDO::getAutoRedeliveryCount, maxAutoRedeliveries())
@@ -219,6 +222,8 @@ public class EventDeliveryService {
             for (OrderEventDO event : events) {
                 if (publishOrderSafely(event, "stale-redelivery")) {
                     recordOrderAutoRedelivery(event);
+                } else if (!circuitBreaker.allowNormalPublish(ContentType.ORDER.getCode())) {
+                    return;
                 }
             }
             if (events.size() < batchSize()) {
@@ -231,6 +236,9 @@ public class EventDeliveryService {
     private void scanPaymentEvents(LocalDateTime cutoff) {
         long lastId = 0L;
         for (int batch = 0; batch < maxBatches(); batch++) {
+            if (!circuitBreaker.allowNormalPublish(ContentType.PAYMENT.getCode())) {
+                return;
+            }
             List<PaymentEventDO> events = paymentEventDbService.list(new LambdaQueryWrapper<PaymentEventDO>()
                     .eq(PaymentEventDO::getAcked, EventAckStatus.INIT.getCode())
                     .lt(PaymentEventDO::getAutoRedeliveryCount, maxAutoRedeliveries())
@@ -241,6 +249,8 @@ public class EventDeliveryService {
             for (PaymentEventDO event : events) {
                 if (publishPaymentSafely(event, "stale-redelivery")) {
                     recordPaymentAutoRedelivery(event);
+                } else if (!circuitBreaker.allowNormalPublish(ContentType.PAYMENT.getCode())) {
+                    return;
                 }
             }
             if (events.size() < batchSize()) {

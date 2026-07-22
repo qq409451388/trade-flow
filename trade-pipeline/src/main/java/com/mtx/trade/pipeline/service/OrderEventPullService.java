@@ -54,9 +54,11 @@ public class OrderEventPullService {
         }
 
         OrderPersistResult result;
+        long processLogId;
         try {
             result = orderEventHandler.handle(event);
-            processLogService.recordSuccess(event, null, OrderEventProcessLogService.TRIGGER_ACTIVE_PULL,
+            processLogId = processLogService.recordSuccess(
+                    event, null, OrderEventProcessLogService.TRIGGER_ACTIVE_PULL,
                     result, startedTime, startedNanos);
         } catch (Exception e) {
             String stage = e instanceof OrderEventProcessingException processingException
@@ -73,12 +75,25 @@ public class OrderEventPullService {
         }
         try {
             ingressEventAckClient.ack(event.contentType(), event.eventId());
-            return new OrderEventPullResult(event.eventId(), result.name(), "processed");
         } catch (Exception e) {
+            try {
+                processLogService.recordIngressAck(processLogId, false);
+            } catch (Exception statusFailure) {
+                e.addSuppressed(statusFailure);
+            }
             log.error("actively pulled order event persisted but Ingress ACK failed, eventId={}",
                     event.eventId(), e);
             return new OrderEventPullResult(event.eventId(), "ACK_FAILED", e.getMessage());
         }
+        try {
+            processLogService.recordIngressAck(processLogId, true);
+        } catch (Exception e) {
+            log.error("actively pulled order event ACK succeeded but audit update failed, "
+                            + "eventId={}, processLogId={}",
+                    event.eventId(), processLogId, e);
+            return new OrderEventPullResult(event.eventId(), "ACK_AUDIT_FAILED", e.getMessage());
+        }
+        return new OrderEventPullResult(event.eventId(), result.name(), "processed");
     }
 
     private static OrderEventMessage toEvent(IngressExhaustedEvent source) {

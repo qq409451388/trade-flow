@@ -20,6 +20,8 @@ public class OrderDO implements Serializable {
 
     @TableId(type = IdType.INPUT)
     private Long id;
+    private Long storageId;
+    private byte[] payloadSha256;
     private Long orderNo;
     private Long userId;
     private String mchntCd;

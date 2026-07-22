@@ -27,6 +27,9 @@ public class PaymentEventProcessLogDO implements Serializable {
     private String eventKey;
     private Long messageVersion;
     private Integer processStatus;
+    private Integer ingressAckStatus;
+    private LocalDateTime ingressAckTime;
+    private Integer redisXackStatus;
     private String failureStage;
     private Integer errorCode;
     private String failureReason;

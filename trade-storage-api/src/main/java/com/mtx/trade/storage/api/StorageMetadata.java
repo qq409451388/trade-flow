@@ -14,7 +14,16 @@ public record StorageMetadata(
         LocalDateTime receivedTime) {
 
     public StorageMetadata {
-        sha256 = sha256 == null ? new byte[0] : sha256.clone();
+        if (storageId == null || storageId <= 0) {
+            throw new IllegalArgumentException("storageId 必须为正数");
+        }
+        if (sha256 == null || sha256.length != 32) {
+            throw new IllegalArgumentException("storage sha256 必须为32字节");
+        }
+        if (payloadLength < 0) {
+            throw new IllegalArgumentException("payloadLength 不能为负数");
+        }
+        sha256 = sha256.clone();
     }
 
     @Override

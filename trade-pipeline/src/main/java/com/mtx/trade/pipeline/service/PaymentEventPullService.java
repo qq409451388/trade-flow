@@ -54,9 +54,11 @@ public class PaymentEventPullService {
         }
 
         PaymentPersistResult result;
+        long processLogId;
         try {
             result = paymentEventHandler.handle(event);
-            processLogService.recordSuccess(event, null, PaymentEventProcessLogService.TRIGGER_ACTIVE_PULL,
+            processLogId = processLogService.recordSuccess(
+                    event, null, PaymentEventProcessLogService.TRIGGER_ACTIVE_PULL,
                     result, startedTime, startedNanos);
         } catch (Exception e) {
             String stage = e instanceof PaymentEventProcessingException processingException
@@ -73,11 +75,24 @@ public class PaymentEventPullService {
         }
         try {
             ingressEventAckClient.ack(event.contentType(), event.eventId());
-            return new PaymentEventPullResult(event.eventId(), result.name(), "processed");
         } catch (Exception e) {
+            try {
+                processLogService.recordIngressAck(processLogId, false);
+            } catch (Exception statusFailure) {
+                e.addSuppressed(statusFailure);
+            }
             log.error("actively pulled payment persisted but Ingress ACK failed, eventId={}", event.eventId(), e);
             return new PaymentEventPullResult(event.eventId(), "ACK_FAILED", e.getMessage());
         }
+        try {
+            processLogService.recordIngressAck(processLogId, true);
+        } catch (Exception e) {
+            log.error("actively pulled payment event ACK succeeded but audit update failed, "
+                            + "eventId={}, processLogId={}",
+                    event.eventId(), processLogId, e);
+            return new PaymentEventPullResult(event.eventId(), "ACK_AUDIT_FAILED", e.getMessage());
+        }
+        return new PaymentEventPullResult(event.eventId(), result.name(), "processed");
     }
 
     private static PaymentEventMessage toEvent(IngressExhaustedEvent source) {

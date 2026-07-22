@@ -28,8 +28,7 @@ public class FuiouSignUtils {
         String keySign = parts.keySign();
         String bodyWithoutSign = parts.bodyWithoutSign();
         if (!StringUtils.hasText(keySign) || !StringUtils.hasText(secret)) {
-            // secret 未配置时放行，便于联调测试
-            return !StringUtils.hasText(secret);
+            return false;
         }
         String content = secret + bodyWithoutSign;
         String hash = DigestUtils.md5DigestAsHex(content.getBytes(StandardCharsets.UTF_8));

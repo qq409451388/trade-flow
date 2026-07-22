@@ -1,6 +1,7 @@
 package com.mtx.trade.ingress.service;
 
 import com.mtx.trade.ingress.constants.RedisKeyConstants;
+import com.mtx.trade.ingress.config.StorageWriteProperties;
 import com.mtx.trade.ingress.utils.RedisLock;
 import com.mtx.trade.storage.api.StorageRef;
 import com.mtx.trade.storage.api.StorageWriteCommand;
@@ -20,10 +21,9 @@ import java.util.HexFormat;
 @RequiredArgsConstructor
 public class StorageWriteService {
 
-    private static final long LOCK_WAIT_MILLIS = 5_000L;
-
     private final StorageWriter storageWriter;
     private final RedisLock redisLock;
+    private final StorageWriteProperties properties;
 
     /**
      * 使用内容幂等键串行化并发写入，数据库唯一键仍作为最终一致性保障。
@@ -34,7 +34,7 @@ public class StorageWriteService {
         }
         String lockKey = buildLockKey(command);
         try {
-            redisLock.acquireLock(lockKey, LOCK_WAIT_MILLIS);
+            redisLock.acquireLock(lockKey, properties.getLockWait(), properties.getLockLease());
         } catch (RuntimeException e) {
             throw new StorageWriteException("storage Redis lock acquire failed", e);
         }

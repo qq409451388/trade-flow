@@ -39,6 +39,10 @@ global-id:
 
 trade:
   ingress:
+    storage-write:
+      lock-wait: 5s
+      # MySQL socketTimeout 为10分钟；租约覆盖单次写入的最大预期耗时，并预留1分钟释放窗口。
+      lock-lease: 11m
     event-delivery:
       retry-delays: 1m,5m,10m
       stale-after: 15m
@@ -68,6 +72,8 @@ trade:
   stream:
     order-event-key: stream:order-event
     payment-event-key: stream:payment-event
+    # 约 7 天峰值缓冲；XADD 使用 MAXLEN~ 原子兜底，正常消费后还会 XDEL。
+    max-length: ${TRADE_STREAM_MAX_LENGTH:1000000}
   thirdparty:
     fuiou:
       order-payload:
@@ -76,7 +82,8 @@ trade:
         message-version-pointer: /recUpdTm # 订单最近完成时间	时间戳(毫秒)
       payment-payload:
         event-key-pointer: /paySsn
-        message-version-pointer: /paySsn # 订单最近完成时间	时间戳(毫秒)
+        message-version-pointer: /payTm
+        zone-id: Asia/Shanghai
 management:
   endpoints:
     web:

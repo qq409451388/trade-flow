@@ -38,6 +38,7 @@
             <groupId>com.mtx.trade</groupId>
             <artifactId>trade-storage-local</artifactId>
             <version>${project.version}</version>
+            <scope>runtime</scope>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>

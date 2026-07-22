@@ -1,9 +1,10 @@
 package com.mtx.trade.pipeline.controller;
 
+import com.mtx.trade.common.dto.ResponseData;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -15,11 +16,11 @@ import java.util.Map;
 public class HealthController {
 
     @GetMapping("/ping")
-    public Map<String, Object> ping() {
+    public ResponseData<Map<String, Object>> ping() {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("status", "UP");
         result.put("service", "trade-pipeline");
-        result.put("timestamp", LocalDateTime.now().toString());
-        return result;
+        result.put("timestamp", OffsetDateTime.now().toString());
+        return ResponseData.success(result);
     }
 }

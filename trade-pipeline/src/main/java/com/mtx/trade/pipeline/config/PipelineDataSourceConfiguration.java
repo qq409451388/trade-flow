@@ -14,7 +14,6 @@ import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.transaction.PlatformTransactionManager;
 
@@ -34,7 +33,7 @@ import java.util.Properties;
 })
 @MapperScan(
         basePackages = "com.mtx.trade.pipeline.mapper",
-        sqlSessionFactoryRef = "sqlSessionFactory")
+        sqlSessionFactoryRef = "pipelineSqlSessionFactory")
 public class PipelineDataSourceConfiguration {
 
     @Bean(name = "pipelineActualDataSource")
@@ -44,8 +43,7 @@ public class PipelineDataSourceConfiguration {
                 .build();
     }
 
-    @Bean(name = "dataSource")
-    @Primary
+    @Bean(name = "pipelineDataSource")
     public DataSource pipelineDataSource(
             @Qualifier("pipelineActualDataSource") DataSource actualDataSource,
             PipelineShardingProperties properties) throws SQLException {
@@ -67,10 +65,9 @@ public class PipelineDataSourceConfiguration {
         return PipelineShardingRuleFactory.create(properties);
     }
 
-    @Bean(name = "sqlSessionFactory")
-    @Primary
-    public SqlSessionFactory sqlSessionFactory(
-            @Qualifier("dataSource") DataSource dataSource,
+    @Bean(name = "pipelineSqlSessionFactory")
+    public SqlSessionFactory pipelineSqlSessionFactory(
+            @Qualifier("pipelineDataSource") DataSource dataSource,
             MybatisPlusProperties mybatisPlusProperties) throws Exception {
         MybatisSqlSessionFactoryBean factory = new MybatisSqlSessionFactoryBean();
         factory.setDataSource(dataSource);
@@ -82,10 +79,9 @@ public class PipelineDataSourceConfiguration {
         return factory.getObject();
     }
 
-    @Bean(name = {"transactionManager", "pipelineTransactionManager"})
-    @Primary
+    @Bean(name = "pipelineTransactionManager")
     public PlatformTransactionManager pipelineTransactionManager(
-            @Qualifier("dataSource") DataSource dataSource) {
+            @Qualifier("pipelineDataSource") DataSource dataSource) {
         return new DataSourceTransactionManager(dataSource);
     }
 }

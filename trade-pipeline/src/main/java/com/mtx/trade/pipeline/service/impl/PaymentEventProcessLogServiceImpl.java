@@ -28,7 +28,7 @@ public class PaymentEventProcessLogServiceImpl implements PaymentEventProcessLog
     @Override
     @Transactional(transactionManager = "pipelineTransactionManager",
             propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
-    public void recordSuccess(
+    public long recordSuccess(
             PaymentEventMessage event,
             String streamRecordId,
             int triggerType,
@@ -37,13 +37,13 @@ public class PaymentEventProcessLogServiceImpl implements PaymentEventProcessLog
             long startedNanos) {
         PaymentEventProcessLogDO entity = base(event, streamRecordId, triggerType, startedTime, startedNanos);
         entity.setProcessStatus(result == PaymentPersistResult.APPLIED ? STATUS_APPLIED : STATUS_IGNORED);
-        saveOrThrow(entity);
+        return saveOrThrow(entity);
     }
 
     @Override
     @Transactional(transactionManager = "pipelineTransactionManager",
             propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
-    public void recordFailure(
+    public long recordFailure(
             PaymentEventMessage event,
             String streamRecordId,
             int triggerType,
@@ -58,7 +58,28 @@ public class PaymentEventProcessLogServiceImpl implements PaymentEventProcessLog
         entity.setErrorCode(actual instanceof BusinessException businessException
                 ? businessException.getCode() : ErrorCode.SYSTEM_ERROR.getCode());
         entity.setFailureReason(limitReason(actual));
-        saveOrThrow(entity);
+        return saveOrThrow(entity);
+    }
+
+    @Override
+    @Transactional(transactionManager = "pipelineTransactionManager",
+            propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
+    public void recordIngressAck(long processLogId, boolean succeeded) {
+        PaymentEventProcessLogDO entity = new PaymentEventProcessLogDO();
+        entity.setId(processLogId);
+        entity.setIngressAckStatus(succeeded ? DELIVERY_SUCCEEDED : DELIVERY_FAILED);
+        entity.setIngressAckTime(succeeded ? LocalDateTime.now() : null);
+        updateOrThrow(entity, "Ingress ACK");
+    }
+
+    @Override
+    @Transactional(transactionManager = "pipelineTransactionManager",
+            propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
+    public void recordRedisXack(long processLogId, boolean succeeded) {
+        PaymentEventProcessLogDO entity = new PaymentEventProcessLogDO();
+        entity.setId(processLogId);
+        entity.setRedisXackStatus(succeeded ? DELIVERY_SUCCEEDED : DELIVERY_FAILED);
+        updateOrThrow(entity, "Redis XACK");
     }
 
     private PaymentEventProcessLogDO base(
@@ -77,15 +98,28 @@ public class PaymentEventProcessLogServiceImpl implements PaymentEventProcessLog
         }
         entity.setStreamRecordId(streamRecordId);
         entity.setTriggerType(triggerType);
+        entity.setIngressAckStatus(DELIVERY_PENDING);
+        entity.setRedisXackStatus(triggerType == TRIGGER_ACTIVE_PULL
+                ? DELIVERY_NOT_APPLICABLE : DELIVERY_PENDING);
         entity.setStartedTime(startedTime);
         entity.setFinishedTime(LocalDateTime.now());
         entity.setDurationMs(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNanos));
         return entity;
     }
 
-    private void saveOrThrow(PaymentEventProcessLogDO entity) {
+    private long saveOrThrow(PaymentEventProcessLogDO entity) {
         if (!processLogDbService.save(entity)) {
             throw new BusinessException(ErrorCode.DATA_CREATE_ERROR, "支付事件处理日志保存失败");
+        }
+        if (entity.getId() == null) {
+            throw new BusinessException(ErrorCode.DATA_CREATE_ERROR, "支付事件处理日志ID未回填");
+        }
+        return entity.getId();
+    }
+
+    private void updateOrThrow(PaymentEventProcessLogDO entity, String stage) {
+        if (!processLogDbService.updateById(entity)) {
+            throw new BusinessException(ErrorCode.DATA_CREATE_ERROR, "支付事件处理日志" + stage + "状态更新失败");
         }
     }
 

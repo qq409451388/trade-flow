@@ -4,6 +4,8 @@
 
 CREATE TABLE `oms_order` (
                              `id` BIGINT NOT NULL COMMENT '全局雪花ID',
+                             `storage_id` BIGINT NOT NULL COMMENT 'Storage 原文ID',
+                             `payload_sha256` BINARY(32) NOT NULL COMMENT 'Storage 原文SHA-256',
 
                              `order_no` BIGINT NOT NULL COMMENT '富友订单号',
                              `user_id` BIGINT DEFAULT NULL COMMENT '用户ID',
@@ -804,6 +806,9 @@ CREATE TABLE `pipeline_order_event_log` (
     `event_key` VARCHAR(128) NULL COMMENT '第三方事件键',
     `message_version` BIGINT UNSIGNED NULL COMMENT '第三方消息版本',
     `process_status` TINYINT UNSIGNED NOT NULL COMMENT '结果：1已应用；2重复或旧版本；3失败',
+    `ingress_ack_status` TINYINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Ingress ACK：0未执行；1成功；2失败',
+    `ingress_ack_time` DATETIME(3) NULL COMMENT 'Ingress ACK成功时间',
+    `redis_xack_status` TINYINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Redis XACK：0未执行；1成功；2失败；3不适用',
     `failure_stage` VARCHAR(32) NULL COMMENT '失败阶段',
     `error_code` INT NULL COMMENT '失败错误码',
     `failure_reason` VARCHAR(1024) NULL COMMENT '失败原因摘要',
@@ -830,6 +835,9 @@ CREATE TABLE `pipeline_payment_event_log` (
     `event_key` VARCHAR(128) NULL COMMENT '第三方事件键',
     `message_version` BIGINT UNSIGNED NULL COMMENT '第三方消息版本',
     `process_status` TINYINT UNSIGNED NOT NULL COMMENT '结果：1已应用；2幂等重复；3失败',
+    `ingress_ack_status` TINYINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Ingress ACK：0未执行；1成功；2失败',
+    `ingress_ack_time` DATETIME(3) NULL COMMENT 'Ingress ACK成功时间',
+    `redis_xack_status` TINYINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Redis XACK：0未执行；1成功；2失败；3不适用',
     `failure_stage` VARCHAR(32) NULL COMMENT '失败阶段',
     `error_code` INT NULL COMMENT '失败错误码',
     `failure_reason` VARCHAR(1024) NULL COMMENT '失败原因摘要',

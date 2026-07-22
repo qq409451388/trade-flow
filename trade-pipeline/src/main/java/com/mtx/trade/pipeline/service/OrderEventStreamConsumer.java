@@ -151,24 +151,37 @@ public class OrderEventStreamConsumer {
             return;
         }
 
+        long processLogId;
         try {
-            processLogService.recordSuccess(event, recordId, triggerType, result, startedTime, startedNanos);
+            processLogId = processLogService.recordSuccess(
+                    event, recordId, triggerType, result, startedTime, startedNanos);
         } catch (Exception e) {
-            log.error("record successful order event attempt failed; message remains pending, recordId={}, eventId={}",
-                    recordId, event.eventId(), e);
+            log.error("record successful order event attempt failed; message remains pending, "
+                            + "recordId={}, eventId={}, storageId={}, eventKey={}",
+                    recordId, event.eventId(), event.storageId(), event.eventKey(), e);
             return;
         }
 
         try {
             ingressEventAckClient.ack(event.contentType(), event.eventId());
         } catch (Exception e) {
-            log.error("order persisted but Ingress ACK failed; message remains pending, recordId={}, eventId={}",
-                    recordId, event.eventId(), e);
+            recordIngressAckFailure(processLogId, e);
+            log.error("order persisted but Ingress ACK failed; message remains pending, "
+                            + "recordId={}, eventId={}, storageId={}, eventKey={}",
+                    recordId, event.eventId(), event.storageId(), event.eventKey(), e);
             return;
         }
-        acknowledge(record);
-        log.info("order event processed, recordId={}, eventId={}, result={}, reclaimed={}",
-                recordId, event.eventId(), result, reclaimed);
+        try {
+            processLogService.recordIngressAck(processLogId, true);
+        } catch (Exception e) {
+            log.error("record successful order Ingress ACK failed; message remains pending, "
+                            + "processLogId={}, recordId={}, eventId={}",
+                    processLogId, recordId, event.eventId(), e);
+            return;
+        }
+        acknowledge(record, processLogId);
+        log.info("order event processed, recordId={}, eventId={}, storageId={}, eventKey={}, result={}, reclaimed={}",
+                recordId, event.eventId(), event.storageId(), event.eventKey(), result, reclaimed);
     }
 
     private void recordFailureAndAcknowledge(
@@ -181,27 +194,57 @@ public class OrderEventStreamConsumer {
             long startedNanos,
             boolean reclaimed) {
         String recordId = record.getId().getValue();
+        long processLogId;
         try {
-            processLogService.recordFailure(
+            processLogId = processLogService.recordFailure(
                     event, recordId, triggerType, stage, failure, startedTime, startedNanos);
         } catch (Exception logFailure) {
             log.error("record failed order event attempt failed; message remains pending, recordId={}, eventId={}",
                     recordId, event == null ? null : event.eventId(), logFailure);
             return;
         }
-        acknowledge(record);
+        acknowledge(record, processLogId);
         log.error("order event processing failed and Redis delivery was acknowledged; Ingress remains unacked, "
                         + "recordId={}, eventId={}, stage={}, reclaimed={}",
                 recordId, event == null ? null : event.eventId(), stage, reclaimed, failure);
     }
 
-    private void acknowledge(MapRecord<String, Object, Object> record) {
+    private void acknowledge(MapRecord<String, Object, Object> record, long processLogId) {
+        boolean succeeded = false;
         try {
             redisTemplate.opsForStream().acknowledge(
                     properties.getStreamKey(), properties.getGroup(), record.getId());
+            succeeded = true;
         } catch (Exception e) {
             log.error("Redis XACK failed; record remains recoverable in PEL, recordId={}",
                     record.getId().getValue(), e);
+        } finally {
+            try {
+                processLogService.recordRedisXack(processLogId, succeeded);
+            } catch (Exception e) {
+                log.error("record order Redis XACK status failed, processLogId={}, recordId={}",
+                        processLogId, record.getId().getValue(), e);
+            }
+        }
+        if (succeeded) {
+            deleteAcknowledgedRecord(record);
+        }
+    }
+
+    private void deleteAcknowledgedRecord(MapRecord<String, Object, Object> record) {
+        try {
+            redisTemplate.opsForStream().delete(properties.getStreamKey(), record.getId());
+        } catch (Exception e) {
+            log.warn("delete acknowledged order Stream record failed; MAXLEN remains as fallback, recordId={}",
+                    record.getId().getValue(), e);
+        }
+    }
+
+    private void recordIngressAckFailure(long processLogId, Exception ackFailure) {
+        try {
+            processLogService.recordIngressAck(processLogId, false);
+        } catch (Exception statusFailure) {
+            ackFailure.addSuppressed(statusFailure);
         }
     }
 

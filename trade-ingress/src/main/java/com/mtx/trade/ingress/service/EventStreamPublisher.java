@@ -1,15 +1,21 @@
 package com.mtx.trade.ingress.service;
 
 import com.mtx.trade.common.enums.ContentType;
-import com.mtx.trade.ingress.constants.RedisKeyConstants;
+import com.mtx.trade.ingress.config.EventStreamProperties;
 import com.mtx.trade.ingress.entity.OrderEventDO;
 import com.mtx.trade.ingress.entity.PaymentEventDO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.connection.RedisStreamCommands.XAddOptions;
+import org.springframework.data.redis.connection.stream.ByteRecord;
+import org.springframework.data.redis.connection.stream.RecordId;
+import org.springframework.data.redis.connection.stream.StreamRecords;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.serializer.RedisSerializer;
 import org.springframework.stereotype.Service;
 
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.HexFormat;
 import java.util.Map;
@@ -30,12 +36,7 @@ import java.util.Map;
 public class EventStreamPublisher {
 
     private final StringRedisTemplate stringRedisTemplate;
-
-    @Value("${trade.stream.order-event-key:" + RedisKeyConstants.ORDER_EVENT_STREAM + "}")
-    private String orderEventStreamKey;
-
-    @Value("${trade.stream.payment-event-key:" + RedisKeyConstants.PAYMENT_EVENT_STREAM + "}")
-    private String paymentEventStreamKey;
+    private final EventStreamProperties properties;
 
     /**
      * 发布订单事件到 Redis Stream。
@@ -52,9 +53,9 @@ public class EventStreamPublisher {
         fields.put("contentType", String.valueOf(ContentType.ORDER.getCode()));
         fields.put("messageVersion", String.valueOf(eventDO.getMessageVersion()));
 
-        stringRedisTemplate.opsForStream().add(orderEventStreamKey, fields);
+        addWithBoundedLength(properties.getOrderEventKey(), fields);
         log.info("order event published, stream={}, eventId={}, storageId={}",
-                orderEventStreamKey, eventDO.getId(), eventDO.getRawId());
+                properties.getOrderEventKey(), eventDO.getId(), eventDO.getRawId());
     }
 
     public void publishPaymentEvent(PaymentEventDO eventDO) {
@@ -67,8 +68,31 @@ public class EventStreamPublisher {
         fields.put("contentType", String.valueOf(ContentType.PAYMENT.getCode()));
         fields.put("messageVersion", String.valueOf(eventDO.getMessageVersion()));
 
-        stringRedisTemplate.opsForStream().add(paymentEventStreamKey, fields);
+        addWithBoundedLength(properties.getPaymentEventKey(), fields);
         log.info("payment event published, stream={}, eventId={}, storageId={}",
-                paymentEventStreamKey, eventDO.getId(), eventDO.getRawId());
+                properties.getPaymentEventKey(), eventDO.getId(), eventDO.getRawId());
+    }
+
+    private void addWithBoundedLength(String streamKey, Map<String, String> fields) {
+        if (properties.getMaxLength() <= 0) {
+            throw new IllegalStateException("trade.stream.max-length 必须为正数");
+        }
+        RedisSerializer<String> serializer = stringRedisTemplate.getStringSerializer();
+        RecordId recordId = stringRedisTemplate.execute((RedisCallback<RecordId>) connection -> {
+            Map<byte[], byte[]> rawFields = new LinkedHashMap<>();
+            fields.forEach((key, value) -> rawFields.put(serialize(serializer, key), serialize(serializer, value)));
+            ByteRecord record = StreamRecords.rawBytes(rawFields)
+                    .withStreamKey(serialize(serializer, streamKey));
+            return connection.streamCommands().xAdd(record,
+                    XAddOptions.maxlen(properties.getMaxLength()).approximateTrimming(true));
+        });
+        if (recordId == null) {
+            throw new IllegalStateException("Redis Stream XADD 未返回 recordId");
+        }
+    }
+
+    private static byte[] serialize(RedisSerializer<String> serializer, String value) {
+        byte[] serialized = serializer == null ? null : serializer.serialize(value);
+        return serialized == null ? value.getBytes(StandardCharsets.UTF_8) : serialized;
     }
 }

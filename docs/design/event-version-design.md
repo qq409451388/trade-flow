@@ -105,13 +105,21 @@ trade:
   thirdparty:
     fuiou:
       order-payload:
-        event-key-pointer: /orderNo
-        message-version-pointer: /version
+        event-key-pointer: /keySign
+        message-version-pointer: /recUpdTm
+      payment-payload:
+        event-key-pointer: /paySsn
+        message-version-pointer: /payTm
+        zone-id: Asia/Shanghai
 ```
 
 如果实际报文为嵌套结构，例如 `data.orderNo`，配置为 `/data/orderNo` 即可。Ingress 先保存原始内容，
 再提取 event 字段；缺少事件键、缺少版本、版本不是非负整数或 event 持久化失败时拒绝请求，并将
 `storageId + payloadSha256 + 失败阶段 + 失败原因` 写入 `trade_event_ingest_failure_log`。失败审计不重复保存原文。
+
+订单 `keySign`、支付 `paySsn` 是与富友确认的事件键。订单 `recUpdTm` 本身是毫秒时间戳；支付 `payTm`
+为 `yyyy-MM-dd HH:mm:ss`，来源 adapter 按 `Asia/Shanghai` 转成 epoch milliseconds。支付版本是当前临时契约，
+富友提供独立消息版本字段后应切换到正式字段。
 
 ## 消费端约束
 

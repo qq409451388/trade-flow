@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mtx.trade.common.enums.ErrorCode;
 import com.mtx.trade.common.exception.BusinessException;
+import com.mtx.trade.pipeline.config.FuiouPaymentProperties;
 import com.mtx.trade.pipeline.dto.PaymentAggregate;
 import com.mtx.trade.pipeline.dto.PaymentEventMessage;
 import com.mtx.trade.pipeline.entity.PaymentAccountDO;
@@ -30,6 +31,7 @@ public class FuiouPaymentParser {
             .withResolverStyle(ResolverStyle.STRICT);
 
     private final ObjectMapper objectMapper;
+    private final FuiouPaymentProperties properties;
 
     public PaymentAggregate parse(
             byte[] content,
@@ -55,6 +57,13 @@ public class FuiouPaymentParser {
             payment.setShopId(longValue(root, "shopId", 0L));
             payment.setShopName(text(root, "shopName"));
             payment.setPayTime(requiredTime(root, "payTm"));
+            long payloadVersion = payment.getPayTime()
+                    .atZone(properties.getZoneId())
+                    .toInstant()
+                    .toEpochMilli();
+            if (payloadVersion != event.messageVersion()) {
+                throw invalid("event.messageVersion 与原文 payTm 不一致");
+            }
             payment.setRefundTime(time(root, "refundTm"));
             payment.setPayType(text(root, "payType"));
             payment.setPayName(text(root, "payName"));

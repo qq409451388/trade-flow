@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.mtx.trade.ingress.dto.EventIngestResult;
+import com.mtx.trade.ingress.common.enums.EventAckStatus;
 import com.mtx.trade.ingress.entity.OrderEventDO;
 import com.mtx.trade.ingress.service.db.OrderEventDbService;
 import org.junit.jupiter.api.BeforeAll;
@@ -52,6 +53,20 @@ class OrderEventServiceImplTest {
 
         assertThat(result.accepted()).isFalse();
         assertThat(result.event()).isSameAs(existing);
+    }
+
+    @Test
+    void shouldRepublishOnlyUnackedDuplicate() {
+        OrderEventDO existing = new OrderEventDO();
+        existing.setAcked(EventAckStatus.INIT.getCode());
+        EventIngestResult<OrderEventDO> duplicate = new EventIngestResult<>(existing, false);
+
+        assertThat(duplicate.shouldPublish(event -> event.getAcked() == EventAckStatus.INIT.getCode()))
+                .isTrue();
+
+        existing.setAcked(EventAckStatus.ACKED.getCode());
+        assertThat(duplicate.shouldPublish(event -> event.getAcked() == EventAckStatus.INIT.getCode()))
+                .isFalse();
     }
 
 }

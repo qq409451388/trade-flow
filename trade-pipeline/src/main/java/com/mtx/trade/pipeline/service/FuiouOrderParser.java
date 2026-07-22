@@ -42,6 +42,8 @@ public class FuiouOrderParser {
 
             OrderDO order = convert(root, OrderDO.class);
             order.setId(null);
+            order.setStorageId(event.storageId());
+            order.setPayloadSha256(event.storageSha256());
             order.setCreateTime(null);
             order.setUpdateTime(null);
             order.setOrderCreateTime(requiredTime(root, "crtTm"));

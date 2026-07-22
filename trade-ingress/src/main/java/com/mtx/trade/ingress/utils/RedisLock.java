@@ -41,14 +41,16 @@ public class RedisLock {
      *
      * @author codex
      */
-    public boolean acquireLock(String lockKey, long waitMillis) {
+    public boolean acquireLock(String lockKey, Duration waitTime, Duration leaseTime) {
         String actualKey = getLockKey(lockKey);
         String lockValue = UUID.randomUUID().toString();
-        long deadline = System.currentTimeMillis() + Math.max(waitMillis, 0L);
+        long waitMillis = requirePositive(waitTime, "waitTime");
+        long leaseMillis = requirePositive(leaseTime, "leaseTime");
+        long deadline = System.currentTimeMillis() + waitMillis;
         try {
             do {
                 Boolean locked = stringRedisTemplate.opsForValue()
-                        .setIfAbsent(actualKey, lockValue, Duration.ofMillis(8000));
+                        .setIfAbsent(actualKey, lockValue, Duration.ofMillis(leaseMillis));
                 if (Boolean.TRUE.equals(locked)) {
                     LOCK_VALUES.get().put(actualKey, lockValue);
                     return true;
@@ -80,7 +82,7 @@ public class RedisLock {
             return false;
         } catch (Exception exception) {
             log.error("Fallback setIfAbsent failed for key:{}", actualKey, exception);
-            return false;
+            throw new IllegalStateException("Redis unavailable while acquiring lock: " + actualKey, exception);
         }
     }
 
@@ -113,6 +115,17 @@ public class RedisLock {
 
     private String getLockKey(String key) {
         return key + "_" + SUFFIX;
+    }
+
+    private static long requirePositive(Duration duration, String name) {
+        if (duration == null || duration.isZero() || duration.isNegative()) {
+            throw new IllegalArgumentException(name + " must be positive");
+        }
+        long millis = duration.toMillis();
+        if (millis <= 0) {
+            throw new IllegalArgumentException(name + " must be at least 1ms");
+        }
+        return millis;
     }
 
     private void sleepForLockWait() {

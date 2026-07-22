@@ -1,9 +1,9 @@
 package com.mtx.trade.ingress.controller;
 
-import com.mtx.trade.common.dto.ResponseData;
 import com.mtx.trade.common.enums.ContentType;
 import com.mtx.trade.common.enums.ErrorCode;
 import com.mtx.trade.common.exception.BusinessException;
+import com.mtx.trade.ingress.common.enums.EventAckStatus;
 import com.mtx.trade.ingress.common.enums.SourceSystem;
 import com.mtx.trade.ingress.dto.EventIngestResult;
 import com.mtx.trade.ingress.dto.FuiouResponse;
@@ -19,23 +19,19 @@ import com.mtx.trade.storage.api.*;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
-import java.util.HexFormat;
+import java.util.Objects;
 
 @Slf4j
 @RestController
 @RequestMapping("/order")
 public class OrderController {
-    @Resource
-    private StorageReader storageReader;
     @Resource
     private StorageWriteService storageWriteService;
     @Resource
@@ -48,13 +44,6 @@ public class OrderController {
     private EventIngestFailureLogService eventIngestFailureLogService;
     @Value("${trade.thirdparty.fuiou.secret}")
     private String secret;
-
-    @GetMapping("/storage-metadata")
-    public ResponseData<StorageMetadata> storageMetadata(
-            @RequestParam Long storageId, @RequestParam String storageSha256) {
-        return ResponseData.success(storageReader.getMetadata(
-                new StorageKey(storageId, parseSha256(storageSha256))));
-    }
 
     @PostMapping("/store-push")
     public FuiouResponse storePush(@RequestBody String payload) {
@@ -104,7 +93,8 @@ public class OrderController {
                 parsedEvent.messageVersion(),
                 storageRef.storageId(),
                 storageRef.sha256());
-        if (ingestResult.accepted()) {
+        if (ingestResult.shouldPublish(event -> Objects.equals(
+                event.getAcked(), EventAckStatus.INIT.getCode()))) {
             eventDO = ingestResult.event();
         }
         return eventDO;
@@ -138,14 +128,4 @@ public class OrderController {
         }
     }
 
-    private static byte[] parseSha256(String value) {
-        try {
-            if (value == null || value.length() != 64) {
-                throw new IllegalArgumentException("invalid length");
-            }
-            return HexFormat.of().parseHex(value);
-        } catch (IllegalArgumentException e) {
-            throw new BusinessException(ErrorCode.PARAM_INVALID, "storageSha256 必须为64位十六进制字符串");
-        }
-    }
 }

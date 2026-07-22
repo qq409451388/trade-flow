@@ -40,6 +40,7 @@ public class PaymentEventHandler {
             if (content == null || content.length == 0) {
                 throw new BusinessException(ErrorCode.NOT_FOUND, "支付事件关联的 Storage 原文不存在");
             }
+            StorageContentValidator.requireComplete(metadata, content, "支付");
             stage = PaymentEventProcessStage.PAYLOAD_PARSE;
             PaymentAggregate aggregate = paymentParser.parse(content, event, metadata.receivedTime());
             stage = PaymentEventProcessStage.PAYMENT_PERSIST;
