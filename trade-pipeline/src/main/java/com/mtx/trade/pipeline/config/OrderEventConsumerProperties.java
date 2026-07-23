@@ -19,7 +19,8 @@ public class OrderEventConsumerProperties {
     private Duration reclaimDelay = Duration.ofSeconds(30);
     private Duration pendingMinIdle = Duration.ofMinutes(1);
     private String ingressAckUrl = "http://127.0.0.1:8115/trade-ingress/event/ack";
+    private String ingressBatchAckUrl = "http://127.0.0.1:8115/trade-ingress/event/batch-ack";
     private Duration ingressAckConnectTimeout = Duration.ofSeconds(3);
     private Duration ingressAckReadTimeout = Duration.ofSeconds(5);
-    private String ingressExhaustedUrl = "http://127.0.0.1:8115/trade-ingress/event/redelivery-exhausted";
+    private String ingressUnackedUrl = "http://127.0.0.1:8115/trade-ingress/event/unacked";
 }

@@ -1,137 +1,99 @@
-# Event 消息版本设计
+# Event 版本与可靠接管设计
 
-> 更新日期：2026-07-21。当前实现面向单机 Java + 单台 MySQL。
+> 更新日期：2026-07-23。当前实现面向单机 Java、MySQL 与 Redis Stream。
 
-## 数据契约
+## 1. 事实源和职责
 
-`trade_order_event` 和 `trade_payment_event` 增加 `message_version BIGINT UNSIGNED NOT NULL`。
-消息版本由第三方来源 adapter 从原始报文中提取并转换为非负 `long`，业务 Service 不解析第三方 JSON。
+- Ingress MySQL 的 `trade_order_event`、`trade_payment_event` 是事件事实源。
+- Redis Stream 只负责实时通知和削峰，通知允许重复、暂停或被裁剪。
+- Pipeline 处理审计是业务是否已经成功的事实。
+- `event.acked=0` 表示 Pipeline 尚未完成接管确认，必须继续被定时补拉看到。
+- `event.acked=1` 表示 Pipeline 已经成功处理，或失败已达到人工终态并可靠记录审计。
 
-版本幂等键：
+Ingress 写 Storage 和 event 后尝试发布 Redis 通知。Redis 失败不影响 event 入库，也不把 event 标记为失败。
+Pipeline 除实时消费外，定时补拉超过实时缓冲期的全部未 ACK event，保证 Redis 丢失时仍可恢复。
 
-- 订单：`source_system + third_event_key + message_version`
-- 支付：`source_system + third_event_key + message_version`
+## 2. 消息版本
 
-相同事件键、相同版本重复推送不会生成第二条 event。为保证至少一次投递，未 ACK 的 event 允许重复发布到 Redis Stream。
+`trade_order_event` 和 `trade_payment_event` 使用来源 adapter 提取的非负 `message_version`：
 
-## 入库行为
+- 订单幂等键：`source_system + third_event_key + message_version`。
+- 支付幂等键：`source_system + third_event_key + message_version`。
+- Redis 消息携带 `eventId + storageId + storageSha256 + sourceSystem + eventKey + messageVersion`。
+- 消费端按第三方 `messageVersion` 判断新旧，不使用 event ID 或 Snowflake ID 代替业务版本。
 
-ingress 固定保存并发布所有版本，不提供版本保留策略配置。每个新版本保存一条 event，消费端根据
-`eventKey + messageVersion` 决定是否处理。相同业务事件的旧版本晚到时仍会入库和发布，ingress 不判断版本新旧。
+富友订单暂取 `recUpdTm`；支付暂将 `payTm` 按 `Asia/Shanghai` 转成 epoch milliseconds。
 
-相同事件键、相同版本的重复推送由数据库唯一键兜底，不产生第二条 event。
+## 3. Ingress Redis 发布保护
 
-## Ingress 投递与 ACK
-
-event 表只表示 Ingress 是否已将事件可靠移交给 Pipeline：
-
-- `acked=0`：event 已在 Ingress 入库，Pipeline 尚未确认接管。
-- `acked=1`：Pipeline 已将事件持久化到自己的 Inbox、任务表或执行表，并向 Ingress ACK。
-
-Ingress 在 event 事务提交后立即发布一次，并在第 1、5、10 分钟检查 ACK 状态后进行短期补发。定时任务每15分钟扫描
-`acked=0 AND auto_redelivery_count<2 AND create_time<=当前时间-15分钟` 的记录并再次发布。只有成功写入 Redis Stream
-才增加自动补发次数，短期重试不计数。达到2次后停止自动扫描，等待人工处理。多 Ingress 实例通过 Redis 锁避免同时执行扫描任务；Redis
-Stream 仍是至少一次投递，Pipeline 必须按 `contentType + eventId` 幂等接管。
-
-Pipeline 接管后调用：
-
-```http
-POST /trade-ingress/event/ack
-Content-Type: application/json
-
-{"contentType":1,"eventId":123}
-```
-
-ACK 更新是幂等操作。`acked=1` 只表示 Pipeline 已可靠接管，不表示执行成功；Pipeline 执行成功、失败和重试状态均不写回
-`trade_order_event` 或 `trade_payment_event`。
-
-自动补发耗尽记录及人工处理接口：
+发布保护只保护 Ingress 与 Redis，不参与 Pipeline 业务确认：
 
 ```text
-GET  /trade-ingress/event/redelivery-exhausted?contentType=1&limit=500&afterEventId=0
-POST /trade-ingress/event/redeliver
-POST /trade-ingress/event/resume-redelivery
+CLOSED --连续发布失败--> OPEN --Redis连续健康--> CLOSED
 ```
 
-`redeliver` 只人工发布一次，不修改已耗尽次数；`resume-redelivery` 将次数清零，使记录重新进入下一轮自动扫描。即使已经耗尽，
-迟到的 Pipeline ACK 仍可正常将记录更新为 `acked=1`。
+- 发布有每秒速率限制、Stream 高低水位和 `MAXLEN ~` 受控长度。
+- OPEN 时停止新的 XADD，Storage 和 event 继续写入。
+- Redis 恢复后只恢复新通知，不重推历史 event。
+- 首次通知失败后最多执行2次进程内短期重试，任一次成功即停止；不存在数据库重投次数或周期历史重推任务。
+- 不存在 HALF_OPEN、真实业务探针、Pipeline readiness 驱动关闭或 Ingress 积压恢复游标。
 
-人工恢复以 Pipeline 主动拉取耗尽事件并直接处理为主，不经过 Redis；Ingress 的 `redeliver` 和
-`resume-redelivery` 接口保留为备用恢复通道。总自动投递机会由首次投递、`retry-delays` 和
-`max-auto-redeliveries` 共同确定，不再单独配置 `max-attempts`。当前默认共6次。
+## 4. Pipeline 实时消费
 
-Pipeline 主动拉取使用：
+Pipeline 完成业务处理后先可靠写处理审计，再尝试 Ingress ACK，最后 Redis XACK：
+
+| 结果 | Ingress ACK | Redis XACK |
+| --- | --- | --- |
+| APPLIED / IGNORED，ACK 成功 | 成功 | 执行 |
+| APPLIED / IGNORED，ACK 失败 | 保持 `acked=0`，由补拉仅补 ACK | 执行 |
+| 业务失败且失败审计成功 | 不 ACK | 执行 |
+| 审计落库失败 | 不 ACK | 不执行，保留 PEL |
+| 处理中崩溃或 XACK 失败 | 未完成或按前序结果 | 保留 PEL |
+
+PEL 只恢复处理中断、审计落库失败与 XACK 失败，不承担 HTTP ACK 或长期业务重试。
+
+## 5. 未 ACK 批量补拉
+
+Ingress 内部查询接口：
 
 ```http
-POST /trade-pipeline/order-event/pull
+GET /trade-ingress/event/unacked?contentType=1&limit=500&afterEventId=0
 ```
 
-可指定 `eventIds`，或通过 `limit + afterEventId` 按 event ID 游标拉取订单耗尽事件。Pipeline 直接读取 Storage、处理并在成功后
-ACK Ingress，不重新写入 Redis。Ingress 的耗尽事件查询会同时返回 `storageId + storageSha256`。
+核心查询：
 
-Pipeline 默认每分钟按订单、支付通道分别启动一次积压排空，每批500条、单轮最多100批或10分钟，批内共享
-4线程有界执行器；多实例通过 `pipeline_event_pull_control` 的 MySQL 租约互斥并按批续租。游标保证单条失败事件
-在当前 sweep 只尝试一次，不阻塞后续 event，下一轮从头扫描时再重试。人工主动拉取接口继续保留。
-
-主动拉取处理失败必须先以独立事务写入 Pipeline 审计。默认连续主动拉取失败3次前保持 Ingress 未ACK；达到3次后，
-Pipeline 将该失败作为终态接管，ACK Ingress，并按批汇总发送企业微信机器人告警。只有失败审计已经可靠落库时才允许
-终态ACK；审计落库、失败次数查询或Ingress ACK任一步失败，都继续保持事件可重试。审计中
-`process_status=3 + ingress_ack_status=1` 表示已告警、等待人工处理的终态失败。
-
-## Redis 发布熔断
-
-熔断状态按事件通道持久化在 MySQL `trade_event_delivery_control`，Java 内存只缓存最多5秒，Redis 不参与
-保存自身熔断状态。服务重启后必须从数据库恢复状态。状态不变量如下：
-
-- `CLOSED`：普通请求、短期重试和定时扫描允许发布。
-- `OPEN`：所有自动发布立即跳过；Storage 和 event 仍正常入库，不安排新的短期重试，也不增加自动补发次数。
-- `HALF_OPEN`：普通发布仍禁止，只有持有 MySQL 恢复租约的实例可以发布一条探测事件并等待 Pipeline ACK。
-
-状态流转：
-
-1. `CLOSED -> OPEN`：1分钟窗口内 Redis 发布失败达到10次，或每30秒一次的 Pipeline readiness 连续失败2次。
-   Redis扫描任务锁不可用也计为发布基础设施失败。readiness 由 MySQL 租约保证每个通道同一时刻只有一个实例探测。
-2. `OPEN -> OPEN`：每30秒检查 Ingress Redis PING 和 Pipeline readiness；任一失败则清零连续健康次数。
-3. `OPEN -> HALF_OPEN`：上述两项连续2次健康，且当前实例取得数据库恢复租约。
-4. `HALF_OPEN -> OPEN`：探测发布失败或 Pipeline readiness 再次失败，立即重新打开并等待下一轮探活。
-5. `HALF_OPEN -> CLOSED`：探测 event 已被 Pipeline ACK；记录当时最大未ACK event ID作为本轮积压截止点。
-6. `CLOSED` 积压恢复：持有恢复租约的实例按 ID 游标每批最多100条恢复，每条重新执行立即投递并安排
-   1、5、10分钟短期重试。新进入的事件不受积压游标影响，正常实时发布。
-
-`recovery_owner + recovery_lease_until` 保证多 Ingress 实例只有一个探活或恢复；
-`recovery_cursor_id + recovery_cutoff_id` 保证重启后继续上次积压进度，不会一次性灌入全部消息。
-Ingress 人工 `redeliver` 是明确的运维强制通道，允许绕过 `OPEN` 自动发布限制，但失败仍会更新熔断失败信息；
-它不会自行关闭熔断。
-
-Pipeline readiness 不是固定返回UP的存活检查，而是验证 Pipeline数据库、Storage只读数据源、Redis、
-订单消费组以及内容类型支持情况。支付consumer尚未实现，因此支付通道readiness当前不会返回可恢复。
-
-## 富友字段提取
-
-富友订单适配器通过 Jackson JSON Pointer 提取字段：
-
-```yaml
-trade:
-  thirdparty:
-    fuiou:
-      order-payload:
-        event-key-pointer: /keySign
-        message-version-pointer: /recUpdTm
-      payment-payload:
-        event-key-pointer: /paySsn
-        message-version-pointer: /payTm
-        zone-id: Asia/Shanghai
+```sql
+WHERE acked = 0
+  AND create_time <= :now - :realtimeGracePeriod
+  AND id > :afterEventId
+ORDER BY id
+LIMIT :batchSize
 ```
 
-如果实际报文为嵌套结构，例如 `data.orderNo`，配置为 `/data/orderNo` 即可。Ingress 先保存原始内容，
-再提取 event 字段；缺少事件键、缺少版本、版本不是非负整数或 event 持久化失败时拒绝请求，并将
-`storageId + payloadSha256 + 失败阶段 + 失败原因` 写入 `trade_event_ingest_failure_log`。失败审计不重复保存原文。
+索引为 `(acked, create_time, id)`。订单、支付独立调度并使用内容类型级 MySQL 租约；每批默认500条，
+保留最大批次、最大运行时长、批次续租和共享有界工作线程。单条失败不阻塞同批后续事件，下一轮重新从游标0查询。
 
-订单 `keySign`、支付 `paySsn` 是与富友确认的事件键。订单 `recUpdTm` 本身是毫秒时间戳；支付 `payTm`
-为 `yyyy-MM-dd HH:mm:ss`，来源 adapter 按 `Asia/Shanghai` 转成 epoch milliseconds。支付版本是当前临时契约，
-富友提供独立消息版本字段后应切换到正式字段。
+每批先按 `event_id IN (...)` 一次查询成功审计，以及主动补拉失败次数已经达到终态阈值的审计：
 
-## 消费端约束
+- 已成功或已进入人工终态：不读 Storage，不运行 Handler，仅进入批量 ACK。
+- 未成功：运行对应 Handler；成功或达到人工终态后进入同一批量 ACK。
+- 可恢复失败：保持未 ACK，下一轮重试。
 
-Redis Stream 消息增加 `eventKey` 和 `messageVersion`。消费端应按
-`sourceSystem + eventKey` 保存已处理最大版本，并忽略不大于该版本的乱序消息；eventId 不能代替第三方消息版本。
+批量 ACK 接口：
+
+```http
+POST /trade-ingress/event/batch-ack
+```
+
+单批最多500条，幂等返回请求数、首次 ACK 数、已 ACK 数和不存在数。HTTP 失败不回滚业务，下轮继续收敛。
+
+## 6. 并发与终态
+
+- 30秒实时缓冲期降低实时 Consumer 与补拉同时处理同一事件的概率。
+- 多 Pipeline 实例通过 `pipeline_event_pull_control` 保证每个内容类型只有一个补拉 sweep。
+- 订单更新使用带版本条件的原子 UPDATE；竞争失败的旧版本按 IGNORED 收敛，不能覆盖新版本。
+- 支付通过 `paySsn` 唯一约束和 SHA 比较保证不可变幂等。
+- 主动补拉连续失败达到阈值后，先可靠写失败审计，再批量 ACK 形成人工终态，并按批汇总企微告警。
+- 审计、失败次数查询或 ACK 失败时保持可恢复状态。
+
+Readiness 仅用于监控 Pipeline DB、Storage、Redis、消费组和 Subscription 状态，不参与数据正确性或 Ingress 发布状态流转。

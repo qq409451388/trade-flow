@@ -818,6 +818,7 @@ CREATE TABLE `pipeline_order_event_log` (
     `create_time` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     PRIMARY KEY (`id`),
     KEY `idx_event_time` (`event_id`, `create_time`),
+    KEY `idx_event_success` (`event_id`, `process_status`),
     KEY `idx_status_time` (`process_status`, `create_time`),
     KEY `idx_storage` (`storage_id`, `payload_sha256`)
 ) ENGINE=InnoDB
@@ -847,6 +848,7 @@ CREATE TABLE `pipeline_payment_event_log` (
     `create_time` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     PRIMARY KEY (`id`),
     KEY `idx_event_time` (`event_id`, `create_time`),
+    KEY `idx_event_success` (`event_id`, `process_status`),
     KEY `idx_status_time` (`process_status`, `create_time`),
     KEY `idx_storage` (`storage_id`, `payload_sha256`)
 ) ENGINE=InnoDB
@@ -865,7 +867,7 @@ CREATE TABLE `pipeline_event_pull_control` (
 ) ENGINE=InnoDB
   DEFAULT CHARSET=utf8mb4
   COLLATE=utf8mb4_0900_ai_ci
-  COMMENT='Pipeline耗尽事件主动拉取租约';
+  COMMENT='Pipeline未ACK事件批量补拉租约';
 
 INSERT INTO `pipeline_event_pull_control` (`content_type`)
 VALUES (1), (2);

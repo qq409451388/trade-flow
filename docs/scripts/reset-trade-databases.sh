@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 清空本机 Trade MySQL 数据，保留表结构并恢复必要种子记录。
+# 删除并按 docs/sql 最终脚本重建本机 Trade MySQL。
 set -Eeuo pipefail
 umask 077
 
@@ -18,11 +18,11 @@ usage() {
   TRADE_DB_PASSWORD   MySQL 密码，默认空
   TRADE_DB_CONFIRM    设置为 YES 可跳过交互确认
 
-脚本会 TRUNCATE 以下数据库中的全部 BASE TABLE：
+脚本会 DROP 并重新创建以下数据库：
   trade_flow
   trade_pipeline
 
-警告：TRUNCATE 会立即提交，不能回滚。
+警告：全部本地数据都会删除且不能恢复。
 EOF
     exit 1
 }
@@ -65,50 +65,22 @@ run_mysql() {
     fi
 }
 
-SCHEMA_COUNT="$(run_mysql --execute="SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name IN ('trade_flow', 'trade_pipeline')")"
-[[ "$SCHEMA_COUNT" == "2" ]] \
-    || fail "未同时找到 trade_flow 和 trade_pipeline，请先执行 docs/sql 下的建库脚本"
-
-TRUNCATE_SQL="$(run_mysql --execute="
-SELECT CONCAT('TRUNCATE TABLE ', table_schema, '.', table_name, ';')
-FROM information_schema.tables
-WHERE table_schema IN ('trade_flow', 'trade_pipeline')
-  AND table_type = 'BASE TABLE'
-ORDER BY table_schema, table_name")"
-
-[[ -n "$TRUNCATE_SQL" ]] || fail "两个 Trade 数据库中没有可清理的表"
-TABLE_COUNT="$(printf '%s\n' "$TRUNCATE_SQL" | wc -l | tr -d ' ')"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SQL_DIR="$(cd "$SCRIPT_DIR/../sql" && pwd)"
 
 echo "即将清空本机 MySQL：$DB_HOST:$DB_PORT"
 echo "数据库：trade_flow、trade_pipeline"
-echo "表数量：$TABLE_COUNT"
 echo "请先停止 trade-ingress 和 trade-pipeline。"
 
 if [[ "${TRADE_DB_CONFIRM:-}" != "YES" ]]; then
-    read -r -p "输入 TRUNCATE trade_flow trade_pipeline 继续: " confirmation
-    [[ "$confirmation" == "TRUNCATE trade_flow trade_pipeline" ]] || fail "已取消"
+    read -r -p "输入 REBUILD trade_flow trade_pipeline 继续: " confirmation
+    [[ "$confirmation" == "REBUILD trade_flow trade_pipeline" ]] || fail "已取消"
 fi
-
-PLAN_FILE="$(mktemp "${TMPDIR:-/tmp}/trade-reset.XXXXXX.sql")"
-trap 'rm -f "$PLAN_FILE"' EXIT INT TERM
-
-{
-    echo 'SET FOREIGN_KEY_CHECKS = 0;'
-    printf '%s\n' "$TRUNCATE_SQL"
-    echo 'SET FOREIGN_KEY_CHECKS = 1;'
-    cat <<'SQL'
-INSERT INTO `trade_flow`.`trade_event_delivery_control`
-  (`content_type`, `circuit_status`, `failure_count`, `health_success_count`,
-   `recovery_cursor_id`, `recovery_cutoff_id`, `version`)
-VALUES
-  (1, 0, 0, 0, 0, 0, 0),
-  (2, 0, 0, 0, 0, 0, 0);
-
-INSERT INTO `trade_pipeline`.`pipeline_event_pull_control` (`content_type`)
-VALUES (1), (2);
-SQL
-} > "$PLAN_FILE"
-
-run_mysql < "$PLAN_FILE"
-echo "完成：已清空 $TABLE_COUNT 张表，并恢复事件投递及主动拉取控制记录。"
+run_mysql --execute="DROP DATABASE IF EXISTS trade_flow; DROP DATABASE IF EXISTS trade_pipeline;"
+run_mysql < "$SQL_DIR/trade-databases.sql"
+run_mysql trade_flow < "$SQL_DIR/trade-flow-base-schema.sql"
+run_mysql trade_flow < "$SQL_DIR/trade-storage-shards.sql"
+run_mysql trade_pipeline < "$SQL_DIR/trade-pipeline-base-schema.sql"
+run_mysql trade_pipeline < "$SQL_DIR/trade-pipeline-year-shards.sql"
+echo "完成：已按 docs/sql 最终脚本重建 trade_flow 和 trade_pipeline。"
 echo "提示：Redis 未清理；开始完整重放前请单独检查 database 5 的 Stream。"

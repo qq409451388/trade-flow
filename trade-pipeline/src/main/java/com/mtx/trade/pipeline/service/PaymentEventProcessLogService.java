@@ -3,6 +3,8 @@ package com.mtx.trade.pipeline.service;
 import com.mtx.trade.pipeline.dto.PaymentEventMessage;
 
 import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Set;
 
 /** 支付事件每次实际处理的独立审计。 */
 public interface PaymentEventProcessLogService {
@@ -11,7 +13,7 @@ public interface PaymentEventProcessLogService {
     int TRIGGER_STREAM = 1;
     /** 从 Redis Stream PEL 接管超时未确认消息后触发处理。 */
     int TRIGGER_PEL_RECLAIM = 2;
-    /** Pipeline 主动从 Ingress 拉取补发耗尽事件后触发处理，不经过 Redis Stream。 */
+    /** Pipeline 主动从 Ingress 拉取未 ACK 事件后触发处理，不经过 Redis Stream。 */
     int TRIGGER_ACTIVE_PULL = 3;
 
     /** 事件产生了有效业务变更并成功落库。 */
@@ -53,4 +55,9 @@ public interface PaymentEventProcessLogService {
 
     /** 查询指定事件已经发生的主动拉取失败次数，包含刚落库的本次失败。 */
     long countActivePullFailures(long eventId);
+
+    /** 一次查询本批中已有成功审计或已达到人工终态、后续只需 ACK 的事件。 */
+    Set<Long> findAckOnlyEventIds(List<Long> eventIds, int terminalFailureAttempts);
+
+    void recordIngressAckByEventIds(List<Long> eventIds, boolean succeeded);
 }

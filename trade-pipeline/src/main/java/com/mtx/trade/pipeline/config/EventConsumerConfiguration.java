@@ -29,7 +29,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 @EnableConfigurationProperties({
         OrderEventConsumerProperties.class,
         PaymentEventConsumerProperties.class,
-        ExhaustedEventPullProperties.class,
+        UnackedEventPullProperties.class,
         FuiouOrderProperties.class,
         FuiouPaymentProperties.class
 })
@@ -40,8 +40,8 @@ public class EventConsumerConfiguration {
     public static final String STREAM_WATCHDOG_SCHEDULER = "streamWatchdogTaskScheduler";
     public static final String ORDER_PEL_SCHEDULER = "orderPelTaskScheduler";
     public static final String PAYMENT_PEL_SCHEDULER = "paymentPelTaskScheduler";
-    public static final String EXHAUSTED_PULL_SCHEDULER = "exhaustedPullTaskScheduler";
-    public static final String EXHAUSTED_PULL_WORKER_EXECUTOR = "exhaustedPullWorkerExecutor";
+    public static final String UNACKED_PULL_SCHEDULER = "unackedPullTaskScheduler";
+    public static final String UNACKED_PULL_WORKER_EXECUTOR = "unackedPullWorkerExecutor";
 
     @Bean(name = ORDER_STREAM_EXECUTOR)
     @ConditionalOnProperty(prefix = "trade.pipeline.order-event-consumer",
@@ -122,23 +122,23 @@ public class EventConsumerConfiguration {
         return scheduler(1, "pipeline-payment-pel-");
     }
 
-    @Bean(name = EXHAUSTED_PULL_SCHEDULER)
-    public ThreadPoolTaskScheduler exhaustedPullTaskScheduler() {
-        return scheduler(2, "pipeline-exhausted-pull-");
+    @Bean(name = UNACKED_PULL_SCHEDULER)
+    public ThreadPoolTaskScheduler unackedPullTaskScheduler() {
+        return scheduler(2, "pipeline-unacked-pull-");
     }
 
-    @Bean(name = EXHAUSTED_PULL_WORKER_EXECUTOR)
-    public ThreadPoolTaskExecutor exhaustedPullWorkerExecutor(ExhaustedEventPullProperties properties) {
+    @Bean(name = UNACKED_PULL_WORKER_EXECUTOR)
+    public ThreadPoolTaskExecutor unackedPullWorkerExecutor(UnackedEventPullProperties properties) {
         int parallelism = properties.getParallelism();
         if (parallelism <= 0 || parallelism > 16) {
-            throw new IllegalArgumentException("trade.pipeline.exhausted-event-pull.parallelism 必须为1~16");
+            throw new IllegalArgumentException("trade.pipeline.unacked-event-pull.parallelism 必须为1~16");
         }
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         executor.setCorePoolSize(parallelism);
         executor.setMaxPoolSize(parallelism);
         executor.setQueueCapacity(1000);
         executor.setRejectedExecutionHandler(new java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy());
-        executor.setThreadNamePrefix("pipeline-exhausted-worker-");
+        executor.setThreadNamePrefix("pipeline-unacked-worker-");
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(30);
         return executor;

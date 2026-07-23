@@ -6,7 +6,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-/** 定时执行投递熔断探活、半开探测和积压恢复。 */
+/** 定时探测 Redis 发布能力；恢复后仅放行新的实时通知。 */
 @Component
 @RequiredArgsConstructor
 public class EventDeliveryRecoveryTask {
@@ -16,7 +16,7 @@ public class EventDeliveryRecoveryTask {
     @Scheduled(
             fixedDelayString = "${trade.ingress.event-delivery.circuit.scheduler-delay-ms:30000}",
             scheduler = EventDeliveryConfiguration.CIRCUIT_RECOVERY_SCHEDULER)
-    public void recoverCircuitsAndDrainBacklog() {
-        recoveryService.recoverCircuitsAndDrainBacklog();
+    public void recoverPublishing() {
+        recoveryService.recoverPublishing();
     }
 }

@@ -5,17 +5,14 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import java.time.Duration;
 import java.util.List;
 
-/** Ingress 事件投递与补发配置。 */
+/** Ingress Redis实时通知配置。 */
 @ConfigurationProperties("trade.ingress.event-delivery")
 public class EventDeliveryProperties {
 
     private List<Duration> retryDelays = List.of(
-            Duration.ofMinutes(1), Duration.ofMinutes(5), Duration.ofMinutes(10));
-    private Duration staleAfter = Duration.ofMinutes(15);
-    private int batchSize = 500;
-    private int maxBatches = 20;
-    private int maxAutoRedeliveries = 2;
-    private Duration scanLockLease = Duration.ofMinutes(14);
+            Duration.ofMinutes(1), Duration.ofMinutes(2));
+    /** Redis 实时链路优先处理窗口；窗口外的未 ACK 事件可由 Pipeline 补拉。 */
+    private Duration realtimeGracePeriod = Duration.ofSeconds(30);
 
     public List<Duration> getRetryDelays() {
         return retryDelays;
@@ -25,43 +22,12 @@ public class EventDeliveryProperties {
         this.retryDelays = retryDelays;
     }
 
-    public Duration getStaleAfter() {
-        return staleAfter;
+    public Duration getRealtimeGracePeriod() {
+        return realtimeGracePeriod;
     }
 
-    public void setStaleAfter(Duration staleAfter) {
-        this.staleAfter = staleAfter;
+    public void setRealtimeGracePeriod(Duration realtimeGracePeriod) {
+        this.realtimeGracePeriod = realtimeGracePeriod;
     }
 
-    public int getBatchSize() {
-        return batchSize;
-    }
-
-    public void setBatchSize(int batchSize) {
-        this.batchSize = batchSize;
-    }
-
-    public int getMaxBatches() {
-        return maxBatches;
-    }
-
-    public void setMaxBatches(int maxBatches) {
-        this.maxBatches = maxBatches;
-    }
-
-    public int getMaxAutoRedeliveries() {
-        return maxAutoRedeliveries;
-    }
-
-    public void setMaxAutoRedeliveries(int maxAutoRedeliveries) {
-        this.maxAutoRedeliveries = maxAutoRedeliveries;
-    }
-
-    public Duration getScanLockLease() {
-        return scanLockLease;
-    }
-
-    public void setScanLockLease(Duration scanLockLease) {
-        this.scanLockLease = scanLockLease;
-    }
 }

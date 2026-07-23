@@ -5,7 +5,6 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.mtx.trade.common.enums.ContentType;
 import com.mtx.trade.common.enums.ErrorCode;
 import com.mtx.trade.common.exception.BusinessException;
-import com.mtx.trade.common.utils.EnterpriseWechatRobotUtils;
 import com.mtx.trade.ingress.common.enums.DeliveryCircuitStatus;
 import com.mtx.trade.ingress.config.EventDeliveryCircuitProperties;
 import com.mtx.trade.ingress.entity.EventDeliveryControlDO;
@@ -20,384 +19,154 @@ import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * Redis Stream 发布熔断状态机。
- *
- * <p>数据库是唯一事实源；内存只缓存最多数秒。CLOSED允许普通发布，OPEN完全停止普通发布，
- * HALF_OPEN只允许持有恢复租约的探测任务发布。</p>
- */
+/** 只保护 Redis 通知发布的 CLOSED/OPEN 状态；不参与 Pipeline 业务确认。 */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class EventDeliveryCircuitBreaker {
-
     private static final int MAX_REASON_LENGTH = 1024;
-
-    private final EventDeliveryControlDbService controlDbService;
+    private final EventDeliveryControlDbService dbService;
     private final EventDeliveryCircuitProperties properties;
-    private final Map<Integer, CachedState> cache = new ConcurrentHashMap<>();
-    private final String recoveryOwner = "ingress-" + UUID.randomUUID();
+    private final String owner = "ingress-" + UUID.randomUUID();
 
     @PostConstruct
-    public void initialize() {
-        if (!properties.isEnabled()) {
-            return;
-        }
-        ensureControl(ContentType.ORDER.getCode());
-        ensureControl(ContentType.PAYMENT.getCode());
+    void initialize() {
+        if (!properties.isEnabled()) return;
+        ensure(ContentType.ORDER.getCode());
+        ensure(ContentType.PAYMENT.getCode());
     }
 
-    public boolean allowNormalPublish(int contentType) {
-        return !properties.isEnabled()
-                || state(contentType).status() == DeliveryCircuitStatus.CLOSED.getCode();
-    }
-
-    public String recoveryOwner() {
-        return recoveryOwner;
-    }
-
-    @Transactional(transactionManager = "ingressTransactionManager", rollbackFor = Exception.class)
-    public void recordPublishFailure(int contentType, Throwable failure) {
-        if (!properties.isEnabled()) {
-            return;
-        }
-        EventDeliveryControlDO control = locked(contentType);
-        LocalDateTime now = LocalDateTime.now();
-        if (control.getCircuitStatus() == DeliveryCircuitStatus.HALF_OPEN.getCode()) {
-            open(control, now, failure);
-            save(control);
-            return;
-        }
-        if (control.getCircuitStatus() == DeliveryCircuitStatus.OPEN.getCode()) {
-            control.setLastFailureTime(now);
-            control.setLastFailureReason(reason(failure));
-            save(control);
-            return;
-        }
-
-        LocalDateTime windowStart = control.getFailureWindowStart();
-        if (windowStart == null || windowStart.plus(properties.getFailureWindow()).isBefore(now)) {
-            control.setFailureWindowStart(now);
-            control.setFailureCount(1);
-        } else {
-            control.setFailureCount(value(control.getFailureCount()) + 1);
-        }
-        control.setLastFailureTime(now);
-        control.setLastFailureReason(reason(failure));
-        if (control.getFailureCount() >= Math.max(1, properties.getFailureThreshold())) {
-            open(control, now, failure);
-            log.error("[Circuit Breaker] ❌ Redis publishing failed repeatedly; circuit is now OPEN. "
-                            + "contentType={}, failures={}, windowStart={}",
-                    contentType, control.getFailureCount(), control.getFailureWindowStart());
-        }
-        save(control);
+    public boolean allowPublish(int contentType) {
+        if (!properties.isEnabled()) return true;
+        EventDeliveryControlDO state = dbService.getById(contentType);
+        return state == null || state.getCircuitStatus() == DeliveryCircuitStatus.CLOSED.getCode();
     }
 
     public List<EventDeliveryControlDO> listDueForHealthCheck() {
-        if (!properties.isEnabled()) {
-            return List.of();
-        }
+        if (!properties.isEnabled()) return List.of();
         LocalDateTime now = LocalDateTime.now();
-        return controlDbService.list(new LambdaQueryWrapper<EventDeliveryControlDO>()
-                .in(EventDeliveryControlDO::getCircuitStatus,
-                        DeliveryCircuitStatus.OPEN.getCode(), DeliveryCircuitStatus.HALF_OPEN.getCode())
-                .and(wrapper -> wrapper.isNull(EventDeliveryControlDO::getNextHealthCheckTime)
+        return dbService.list(new LambdaQueryWrapper<EventDeliveryControlDO>()
+                .eq(EventDeliveryControlDO::getCircuitStatus, DeliveryCircuitStatus.OPEN.getCode())
+                .and(q -> q.isNull(EventDeliveryControlDO::getNextHealthCheckTime)
                         .or().le(EventDeliveryControlDO::getNextHealthCheckTime, now)));
     }
 
-    /** CLOSED 通道也必须探测消费端，否则 Redis 正常而 Pipeline 宕机时永远不会触发熔断。 */
-    public List<EventDeliveryControlDO> listClosedForHealthCheck() {
-        if (!properties.isEnabled()) {
-            return List.of();
-        }
+    public boolean claimHealthCheck(int contentType) {
         LocalDateTime now = LocalDateTime.now();
-        return controlDbService.list(new LambdaQueryWrapper<EventDeliveryControlDO>()
-                .eq(EventDeliveryControlDO::getCircuitStatus, DeliveryCircuitStatus.CLOSED.getCode())
-                .and(wrapper -> wrapper.isNull(EventDeliveryControlDO::getNextHealthCheckTime)
-                        .or().le(EventDeliveryControlDO::getNextHealthCheckTime, now)));
-    }
-
-    public List<EventDeliveryControlDO> listDrainable() {
-        if (!properties.isEnabled()) {
-            return List.of();
-        }
-        return controlDbService.list(new LambdaQueryWrapper<EventDeliveryControlDO>()
-                .eq(EventDeliveryControlDO::getCircuitStatus, DeliveryCircuitStatus.CLOSED.getCode())
-                .gt(EventDeliveryControlDO::getRecoveryCutoffId, 0)
-                .apply("recovery_cursor_id < recovery_cutoff_id"));
-    }
-
-    public boolean claim(int contentType, int requiredStatus) {
-        LocalDateTime now = LocalDateTime.now();
-        return controlDbService.update(new LambdaUpdateWrapper<EventDeliveryControlDO>()
+        return dbService.update(new LambdaUpdateWrapper<EventDeliveryControlDO>()
                 .eq(EventDeliveryControlDO::getContentType, contentType)
-                .eq(EventDeliveryControlDO::getCircuitStatus, requiredStatus)
-                .and(wrapper -> wrapper.isNull(EventDeliveryControlDO::getRecoveryLeaseUntil)
+                .eq(EventDeliveryControlDO::getCircuitStatus, DeliveryCircuitStatus.OPEN.getCode())
+                .and(q -> q.isNull(EventDeliveryControlDO::getRecoveryLeaseUntil)
                         .or().lt(EventDeliveryControlDO::getRecoveryLeaseUntil, now)
-                        .or().eq(EventDeliveryControlDO::getRecoveryOwner, recoveryOwner))
-                .set(EventDeliveryControlDO::getRecoveryOwner, recoveryOwner)
+                        .or().eq(EventDeliveryControlDO::getRecoveryOwner, owner))
+                .set(EventDeliveryControlDO::getRecoveryOwner, owner)
                 .set(EventDeliveryControlDO::getRecoveryLeaseUntil, now.plus(properties.getRecoveryLease())));
     }
 
     @Transactional(transactionManager = "ingressTransactionManager", rollbackFor = Exception.class)
-    public void recordClosedPipelineReady(int contentType) {
-        EventDeliveryControlDO control = locked(contentType);
-        if (control.getCircuitStatus() != DeliveryCircuitStatus.CLOSED.getCode()
-                || !recoveryOwner.equals(control.getRecoveryOwner())) {
+    public void recordPublishFailure(int contentType, Throwable failure) {
+        if (!properties.isEnabled()) return;
+        EventDeliveryControlDO state = locked(contentType);
+        LocalDateTime now = LocalDateTime.now();
+        if (state.getCircuitStatus() == DeliveryCircuitStatus.OPEN.getCode()) {
+            state.setLastFailureTime(now);
+            state.setLastFailureReason(reason(failure));
+            save(state);
             return;
         }
-        control.setPipelineFailureCount(0);
-        scheduleNextCheckAndRelease(control);
-        save(control);
-    }
-
-    @Transactional(transactionManager = "ingressTransactionManager", rollbackFor = Exception.class)
-    public void recordClosedPipelineFailure(int contentType, Throwable failure) {
-        EventDeliveryControlDO control = locked(contentType);
-        if (control.getCircuitStatus() != DeliveryCircuitStatus.CLOSED.getCode()
-                || !recoveryOwner.equals(control.getRecoveryOwner())) {
-            return;
-        }
-        int failures = value(control.getPipelineFailureCount()) + 1;
-        control.setPipelineFailureCount(failures);
-        control.setLastFailureTime(LocalDateTime.now());
-        control.setLastFailureReason(reason(failure));
-        if (failures >= Math.max(1, properties.getPipelineFailureThreshold())) {
-            open(control, LocalDateTime.now(), failure);
-            log.error("[Circuit Breaker] ❌ Pipeline is unavailable; circuit is now OPEN. "
-                            + "contentType={}, consecutiveFailures={}",
-                    contentType, failures);
+        if (state.getFailureWindowStart() == null
+                || state.getFailureWindowStart().plus(properties.getFailureWindow()).isBefore(now)) {
+            state.setFailureWindowStart(now);
+            state.setFailureCount(1);
         } else {
-            scheduleNextCheckAndRelease(control);
+            state.setFailureCount(value(state.getFailureCount()) + 1);
         }
-        save(control);
+        state.setLastFailureTime(now);
+        state.setLastFailureReason(reason(failure));
+        if (state.getFailureCount() >= Math.max(1, properties.getFailureThreshold())) {
+            state.setCircuitStatus(DeliveryCircuitStatus.OPEN.getCode());
+            state.setOpenedTime(now);
+            state.setNextHealthCheckTime(now.plus(properties.getHealthCheckDelay()));
+            state.setHealthSuccessCount(0);
+            log.warn("[Circuit Breaker] 🔄 Redis publishing paused. contentType={}, failures={}",
+                    contentType, state.getFailureCount());
+        }
+        save(state);
     }
 
     @Transactional(transactionManager = "ingressTransactionManager", rollbackFor = Exception.class)
     public boolean recordHealthSuccess(int contentType) {
-        EventDeliveryControlDO control = locked(contentType);
-        if (control.getCircuitStatus() != DeliveryCircuitStatus.OPEN.getCode()
-                || !recoveryOwner.equals(control.getRecoveryOwner())) {
+        EventDeliveryControlDO state = locked(contentType);
+        if (state.getCircuitStatus() != DeliveryCircuitStatus.OPEN.getCode()
+                || !owner.equals(state.getRecoveryOwner())) return false;
+        int successes = value(state.getHealthSuccessCount()) + 1;
+        if (successes < Math.max(1, properties.getHealthSuccessThreshold())) {
+            state.setHealthSuccessCount(successes);
+            releaseForNextCheck(state);
+            save(state);
             return false;
         }
-        int successes = value(control.getHealthSuccessCount()) + 1;
-        control.setHealthSuccessCount(successes);
-        if (successes >= Math.max(1, properties.getHealthSuccessThreshold())) {
-            control.setCircuitStatus(DeliveryCircuitStatus.HALF_OPEN.getCode());
-            control.setProbeEventId(null);
-            control.setRecoveryLeaseUntil(LocalDateTime.now().plus(properties.getRecoveryLease()));
-            save(control);
-            log.warn("[Circuit Breaker] 🔄 Dependencies are healthy; circuit is HALF_OPEN and waiting for "
-                    + "a probe ACK. contentType={}", contentType);
-            return true;
-        }
-        control.setNextHealthCheckTime(LocalDateTime.now().plus(properties.getHealthCheckDelay()));
-        control.setRecoveryOwner(null);
-        control.setRecoveryLeaseUntil(null);
-        save(control);
-        return false;
+        state.setCircuitStatus(DeliveryCircuitStatus.CLOSED.getCode());
+        state.setFailureWindowStart(null);
+        state.setFailureCount(0);
+        state.setOpenedTime(null);
+        state.setNextHealthCheckTime(null);
+        state.setHealthSuccessCount(0);
+        state.setRecoveryOwner(null);
+        state.setRecoveryLeaseUntil(null);
+        save(state);
+        log.info("[Circuit Breaker] ✅ Redis recovered; new notifications resumed. contentType={}", contentType);
+        return true;
     }
 
     @Transactional(transactionManager = "ingressTransactionManager", rollbackFor = Exception.class)
     public void recordHealthFailure(int contentType, Throwable failure) {
-        EventDeliveryControlDO control = locked(contentType);
-        if (control.getCircuitStatus() != DeliveryCircuitStatus.OPEN.getCode()) {
-            return;
-        }
-        control.setHealthSuccessCount(0);
-        control.setNextHealthCheckTime(LocalDateTime.now().plus(properties.getHealthCheckDelay()));
-        control.setLastFailureTime(LocalDateTime.now());
-        control.setLastFailureReason(reason(failure));
-        control.setRecoveryOwner(null);
-        control.setRecoveryLeaseUntil(null);
-        save(control);
+        EventDeliveryControlDO state = locked(contentType);
+        if (state.getCircuitStatus() != DeliveryCircuitStatus.OPEN.getCode()) return;
+        state.setHealthSuccessCount(0);
+        state.setLastFailureTime(LocalDateTime.now());
+        state.setLastFailureReason(reason(failure));
+        releaseForNextCheck(state);
+        save(state);
     }
 
-    @Transactional(transactionManager = "ingressTransactionManager", rollbackFor = Exception.class)
-    public void closeAfterProbe(int contentType, long recoveryCutoffId) {
-        EventDeliveryControlDO control = locked(contentType);
-        if (control.getCircuitStatus() != DeliveryCircuitStatus.HALF_OPEN.getCode()
-                || !recoveryOwner.equals(control.getRecoveryOwner())) {
-            return;
-        }
-        control.setCircuitStatus(DeliveryCircuitStatus.CLOSED.getCode());
-        control.setFailureWindowStart(null);
-        control.setFailureCount(0);
-        control.setOpenedTime(null);
-        control.setNextHealthCheckTime(null);
-        control.setHealthSuccessCount(0);
-        control.setPipelineFailureCount(0);
-        control.setProbeEventId(null);
-        control.setRecoveryOwner(null);
-        control.setRecoveryLeaseUntil(null);
-        control.setRecoveryCursorId(0L);
-        control.setRecoveryCutoffId(Math.max(0L, recoveryCutoffId));
-        save(control);
-        log.info("[Circuit Breaker] ✅ Probe was acknowledged; circuit has recovered and is CLOSED. "
-                        + "contentType={}, recoveryCutoffId={}",
-                contentType, recoveryCutoffId);
+    private void releaseForNextCheck(EventDeliveryControlDO state) {
+        state.setNextHealthCheckTime(LocalDateTime.now().plus(properties.getHealthCheckDelay()));
+        state.setRecoveryOwner(null);
+        state.setRecoveryLeaseUntil(null);
     }
 
-    @Transactional(transactionManager = "ingressTransactionManager", rollbackFor = Exception.class)
-    public void waitForProbeAck(int contentType, Long probeEventId) {
-        EventDeliveryControlDO control = locked(contentType);
-        if (control.getCircuitStatus() != DeliveryCircuitStatus.HALF_OPEN.getCode()
-                || !recoveryOwner.equals(control.getRecoveryOwner())) {
-            return;
-        }
-        control.setProbeEventId(probeEventId);
-        scheduleNextCheckAndRelease(control);
-        save(control);
-    }
-
-    @Transactional(transactionManager = "ingressTransactionManager", rollbackFor = Exception.class)
-    public void reopenAfterProbeFailure(int contentType, Throwable failure) {
-        EventDeliveryControlDO control = locked(contentType);
-        open(control, LocalDateTime.now(), failure);
-        save(control);
-        log.error("[Circuit Breaker] ❌ Half-open probe failed; circuit returned to OPEN. contentType={}",
-                contentType, failure);
-    }
-
-    @Transactional(transactionManager = "ingressTransactionManager", rollbackFor = Exception.class)
-    public void advanceRecoveryCursor(int contentType, long cursorId, boolean finished) {
-        EventDeliveryControlDO control = locked(contentType);
-        if (control.getCircuitStatus() != DeliveryCircuitStatus.CLOSED.getCode()
-                || !recoveryOwner.equals(control.getRecoveryOwner())) {
-            return;
-        }
-        if (finished) {
-            control.setRecoveryCursorId(0L);
-            control.setRecoveryCutoffId(0L);
-        } else {
-            control.setRecoveryCursorId(Math.max(value(control.getRecoveryCursorId()), cursorId));
-        }
-        control.setRecoveryOwner(null);
-        control.setRecoveryLeaseUntil(null);
-        save(control);
-    }
-
-    public EventDeliveryControlDO getControl(int contentType) {
-        return controlDbService.getById(contentType);
-    }
-
-    private CachedState state(int contentType) {
-        long now = System.nanoTime();
-        CachedState cached = cache.get(contentType);
-        if (cached != null && cached.expiresAtNanos() > now) {
-            return cached;
-        }
-        EventDeliveryControlDO control = controlDbService.getById(contentType);
-        if (control == null) {
-            ensureControl(contentType);
-            control = controlDbService.getById(contentType);
-        }
-        CachedState loaded = new CachedState(
-                control == null ? DeliveryCircuitStatus.CLOSED.getCode() : control.getCircuitStatus(),
-                now + Math.max(1L, properties.getStateCacheTtl().toNanos()));
-        cache.put(contentType, loaded);
-        return loaded;
-    }
-
-    private void ensureControl(int contentType) {
-        if (controlDbService.getById(contentType) != null) {
-            return;
-        }
-        EventDeliveryControlDO control = new EventDeliveryControlDO();
-        control.setContentType(contentType);
-        control.setCircuitStatus(DeliveryCircuitStatus.CLOSED.getCode());
-        control.setFailureCount(0);
-        control.setHealthSuccessCount(0);
-        control.setPipelineFailureCount(0);
-        control.setProbeEventId(null);
-        control.setRecoveryCursorId(0L);
-        control.setRecoveryCutoffId(0L);
-        control.setVersion(0);
-        try {
-            controlDbService.save(control);
-        } catch (DuplicateKeyException ignored) {
-            // 另一实例已完成初始化。
-        }
-        cache.remove(contentType);
+    private void ensure(int contentType) {
+        if (dbService.getById(contentType) != null) return;
+        EventDeliveryControlDO state = new EventDeliveryControlDO();
+        state.setContentType(contentType);
+        state.setCircuitStatus(DeliveryCircuitStatus.CLOSED.getCode());
+        state.setFailureCount(0);
+        state.setHealthSuccessCount(0);
+        state.setVersion(0);
+        try { dbService.save(state); } catch (DuplicateKeyException ignored) { }
     }
 
     private EventDeliveryControlDO locked(int contentType) {
-        EventDeliveryControlDO control = controlDbService.getForUpdate(contentType);
-        if (control == null) {
-            ensureControl(contentType);
-            control = controlDbService.getForUpdate(contentType);
+        EventDeliveryControlDO state = dbService.getForUpdate(contentType);
+        if (state == null) { ensure(contentType); state = dbService.getForUpdate(contentType); }
+        if (state == null) throw new BusinessException(ErrorCode.DATA_CREATE_ERROR, "Redis发布保护状态不存在");
+        return state;
+    }
+
+    private void save(EventDeliveryControlDO state) {
+        state.setVersion(value(state.getVersion()) + 1);
+        if (!dbService.updateById(state)) {
+            throw new BusinessException(ErrorCode.DATA_CREATE_ERROR, "Redis发布保护状态更新失败");
         }
-        if (control == null) {
-            throw new BusinessException(ErrorCode.DATA_CREATE_ERROR, "事件投递熔断状态不存在");
-        }
-        return control;
     }
 
-    private void open(EventDeliveryControlDO control, LocalDateTime now, Throwable failure) {
-        control.setCircuitStatus(DeliveryCircuitStatus.OPEN.getCode());
-        control.setOpenedTime(now);
-        control.setNextHealthCheckTime(now.plus(properties.getHealthCheckDelay()));
-        control.setHealthSuccessCount(0);
-        control.setProbeEventId(null);
-        control.setLastFailureTime(now);
-        control.setLastFailureReason(reason(failure));
-        control.setRecoveryOwner(null);
-        control.setRecoveryLeaseUntil(null);
-        control.setRecoveryCursorId(0L);
-        control.setRecoveryCutoffId(0L);
-    }
-
-    private void save(EventDeliveryControlDO control) {
-        control.setVersion(value(control.getVersion()) + 1);
-        boolean updated = controlDbService.update(new LambdaUpdateWrapper<EventDeliveryControlDO>()
-                .eq(EventDeliveryControlDO::getContentType, control.getContentType())
-                .set(EventDeliveryControlDO::getCircuitStatus, control.getCircuitStatus())
-                .set(EventDeliveryControlDO::getFailureWindowStart, control.getFailureWindowStart())
-                .set(EventDeliveryControlDO::getFailureCount, control.getFailureCount())
-                .set(EventDeliveryControlDO::getOpenedTime, control.getOpenedTime())
-                .set(EventDeliveryControlDO::getNextHealthCheckTime, control.getNextHealthCheckTime())
-                .set(EventDeliveryControlDO::getHealthSuccessCount, control.getHealthSuccessCount())
-                .set(EventDeliveryControlDO::getPipelineFailureCount, control.getPipelineFailureCount())
-                .set(EventDeliveryControlDO::getProbeEventId, control.getProbeEventId())
-                .set(EventDeliveryControlDO::getLastFailureTime, control.getLastFailureTime())
-                .set(EventDeliveryControlDO::getLastFailureReason, control.getLastFailureReason())
-                .set(EventDeliveryControlDO::getRecoveryOwner, control.getRecoveryOwner())
-                .set(EventDeliveryControlDO::getRecoveryLeaseUntil, control.getRecoveryLeaseUntil())
-                .set(EventDeliveryControlDO::getRecoveryCursorId, control.getRecoveryCursorId())
-                .set(EventDeliveryControlDO::getRecoveryCutoffId, control.getRecoveryCutoffId())
-                .set(EventDeliveryControlDO::getVersion, control.getVersion()));
-        if (!updated) {
-            throw new BusinessException(ErrorCode.DATA_CREATE_ERROR, "事件投递熔断状态更新失败");
-        }
-        cache.remove(control.getContentType());
-    }
-
-    private void scheduleNextCheckAndRelease(EventDeliveryControlDO control) {
-        control.setNextHealthCheckTime(LocalDateTime.now().plus(properties.getHealthCheckDelay()));
-        control.setRecoveryOwner(null);
-        control.setRecoveryLeaseUntil(null);
-    }
-
-    private static int value(Integer value) {
-        return value == null ? 0 : value;
-    }
-
-    private static long value(Long value) {
-        return value == null ? 0L : value;
-    }
-
+    private static int value(Integer value) { return value == null ? 0 : value; }
     private static String reason(Throwable failure) {
-        String value = failure == null ? null : failure.getMessage();
-        if (!StringUtils.hasText(value)) {
-            value = failure == null ? "unknown" : failure.getClass().getName();
-        }
-        return value.length() <= MAX_REASON_LENGTH ? value : value.substring(0, MAX_REASON_LENGTH);
-    }
-
-    private record CachedState(int status, long expiresAtNanos) {
+        String text = failure == null ? null : failure.getMessage();
+        if (!StringUtils.hasText(text)) text = failure == null ? "unknown" : failure.getClass().getName();
+        return text.length() <= MAX_REASON_LENGTH ? text : text.substring(0, MAX_REASON_LENGTH);
     }
 }

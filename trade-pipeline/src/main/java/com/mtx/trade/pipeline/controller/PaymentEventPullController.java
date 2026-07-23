@@ -15,7 +15,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 
-/** Pipeline 主动恢复投递耗尽的支付事件。 */
+/** Pipeline 主动恢复未 ACK的支付事件。 */
 @Slf4j
 @RestController
 @RequestMapping("/payment-event")
@@ -32,7 +32,7 @@ public class PaymentEventPullController {
         } catch (BusinessException e) {
             return ResponseData.fail(e.getCode(), e.getMessage(), null);
         } catch (Exception e) {
-            log.error("[Exhausted Event Pull] ❌ Manual payment pull request failed.", e);
+            log.error("[Unacked Event Pull] ❌ Manual payment pull request failed.", e);
             return ResponseData.fail(ErrorCode.SYSTEM_ERROR);
         }
     }

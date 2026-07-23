@@ -9,8 +9,7 @@ import lombok.Getter;
 public enum DeliveryCircuitStatus {
 
     CLOSED(0),
-    OPEN(1),
-    HALF_OPEN(2);
+    OPEN(1);
 
     private final int code;
 }

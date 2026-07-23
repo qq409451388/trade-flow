@@ -44,13 +44,9 @@ trade:
       # MySQL socketTimeout 为10分钟；租约覆盖单次写入的最大预期耗时，并预留1分钟释放窗口。
       lock-lease: 11m
     event-delivery:
-      retry-delays: 1m,2m,5m
-      stale-after: 15m
-      scan-cron: "0 */10 * * * *"
-      batch-size: 500
-      max-batches: 20
-      max-auto-redeliveries: 2
-      scan-lock-lease: 14m # 多个 Ingress 实例会同时触发定时任务，但只有取得 Redis 锁的实例执行扫描。设置为14分钟是因为扫描间隔为15分钟
+      # 首次发布失败后最多短重试2次；历史遗漏统一由 Pipeline 未 ACK 补拉收敛。
+      retry-delays: 1m,2m
+      realtime-grace-period: 30s
       circuit:
         enabled: true
         failure-window: 1m
@@ -58,13 +54,7 @@ trade:
         health-check-delay: 30s
         scheduler-delay-ms: 30000
         health-success-threshold: 2
-        pipeline-failure-threshold: 2
         recovery-lease: 2m
-        state-cache-ttl: 5s
-        recovery-batch-size: 100
-        pipeline-readiness-url: ${PIPELINE_READINESS_URL:http://127.0.0.1:8083/trade-pipeline/readiness/event-consumer}
-        readiness-connect-timeout: 3s
-        readiness-read-timeout: 5s
   storage:
     local:
       enabled: true
@@ -72,8 +62,13 @@ trade:
   stream:
     order-event-key: stream:order-event
     payment-event-key: stream:payment-event
+    order-consumer-group: trade-pipeline-order
+    payment-consumer-group: trade-pipeline-payment
     # 约 7 天峰值缓冲；XADD 使用 MAXLEN~ 原子兜底，正常消费后还会 XDEL。
     max-length: ${TRADE_STREAM_MAX_LENGTH:1000000}
+    high-watermark: ${TRADE_STREAM_HIGH_WATERMARK:900000}
+    low-watermark: ${TRADE_STREAM_LOW_WATERMARK:700000}
+    publish-rate-per-second: ${TRADE_STREAM_PUBLISH_RPS:2000}
   thirdparty:
     fuiou:
       order-payload:

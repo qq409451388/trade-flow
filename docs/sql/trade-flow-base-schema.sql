@@ -40,15 +40,13 @@ CREATE TABLE `trade_order_event` (
   `payload_sha256` BINARY(32) NOT NULL COMMENT '原始报文SHA-256，与raw_id共同定位Storage',
   `acked` TINYINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Pipeline接管状态：0未ACK；1已ACK',
   `acked_time` DATETIME(3) NULL COMMENT 'Pipeline ACK时间',
-  `auto_redelivery_count` TINYINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '15分钟后定时补发成功次数',
-  `last_redelivery_time` DATETIME(3) NULL COMMENT '最近一次定时补发成功时间',
   `received_time` DATETIME(3) NOT NULL COMMENT '事件接收时间',
   `create_time` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   `update_time` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_raw_id` (`raw_id`),
   UNIQUE KEY `uk_event_version` (`source_system`, `third_event_key`, `message_version`),
-  KEY `idx_acked_redelivery_time` (`acked`, `auto_redelivery_count`, `create_time`, `id`)
+  KEY `idx_acked_create_id` (`acked`, `create_time`, `id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
   COMMENT='订单接入事实事件，保存90天';
 
@@ -61,15 +59,13 @@ CREATE TABLE `trade_payment_event` (
   `payload_sha256` BINARY(32) NOT NULL COMMENT '原始报文SHA-256，与raw_id共同定位Storage',
   `acked` TINYINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Pipeline接管状态：0未ACK；1已ACK',
   `acked_time` DATETIME(3) NULL COMMENT 'Pipeline ACK时间',
-  `auto_redelivery_count` TINYINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '15分钟后定时补发成功次数',
-  `last_redelivery_time` DATETIME(3) NULL COMMENT '最近一次定时补发成功时间',
   `received_time` DATETIME(3) NOT NULL COMMENT '事件接收时间',
   `create_time` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   `update_time` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_raw_id` (`raw_id`),
   UNIQUE KEY `uk_event_version` (`source_system`, `third_event_key`, `message_version`),
-  KEY `idx_acked_redelivery_time` (`acked`, `auto_redelivery_count`, `create_time`, `id`)
+  KEY `idx_acked_create_id` (`acked`, `create_time`, `id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
   COMMENT='支付接入事实事件，保存90天';
 
@@ -94,20 +90,16 @@ CREATE TABLE `trade_event_ingest_failure_log` (
 
 CREATE TABLE `trade_event_delivery_control` (
   `content_type` TINYINT UNSIGNED NOT NULL COMMENT '事件通道：1订单；2支付',
-  `circuit_status` TINYINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '熔断状态：0 CLOSED；1 OPEN；2 HALF_OPEN',
+  `circuit_status` TINYINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Redis发布状态：0 CLOSED；1 OPEN',
   `failure_window_start` DATETIME(3) NULL COMMENT '当前失败统计窗口起点',
   `failure_count` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '当前窗口Redis发布失败数',
   `opened_time` DATETIME(3) NULL COMMENT '最近进入OPEN时间',
   `next_health_check_time` DATETIME(3) NULL COMMENT '下次允许探活时间',
   `health_success_count` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'OPEN状态连续健康次数',
-  `pipeline_failure_count` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'CLOSED状态Pipeline连续不可用次数',
-  `probe_event_id` BIGINT NULL COMMENT 'HALF_OPEN等待ACK的探测event ID',
   `last_failure_time` DATETIME(3) NULL COMMENT '最近失败时间',
   `last_failure_reason` VARCHAR(1024) NULL COMMENT '最近失败原因',
   `recovery_owner` VARCHAR(64) NULL COMMENT '当前探活或积压恢复实例',
   `recovery_lease_until` DATETIME(3) NULL COMMENT '恢复任务租约截止时间',
-  `recovery_cursor_id` BIGINT NOT NULL DEFAULT 0 COMMENT '熔断积压恢复游标event ID',
-  `recovery_cutoff_id` BIGINT NOT NULL DEFAULT 0 COMMENT '本轮熔断积压截止event ID',
   `version` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '状态变更版本',
   `create_time` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   `update_time` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
@@ -118,8 +110,7 @@ CREATE TABLE `trade_event_delivery_control` (
   COMMENT='Ingress Redis Stream投递熔断持久化状态';
 
 INSERT INTO `trade_event_delivery_control`
-  (`content_type`, `circuit_status`, `failure_count`, `health_success_count`, `pipeline_failure_count`,
-   `recovery_cursor_id`, `recovery_cutoff_id`, `version`)
+  (`content_type`, `circuit_status`, `failure_count`, `health_success_count`, `version`)
 VALUES
-  (1, 0, 0, 0, 0, 0, 0, 0),
-  (2, 0, 0, 0, 0, 0, 0, 0);
+  (1, 0, 0, 0, 0),
+  (2, 0, 0, 0, 0);

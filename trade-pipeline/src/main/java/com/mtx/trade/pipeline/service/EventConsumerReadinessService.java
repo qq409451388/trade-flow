@@ -20,7 +20,7 @@ import java.util.Map;
 public class EventConsumerReadinessService {
 
     private final DataSource pipelineDataSource;
-    private final DataSource storageDataSource;
+    private final ObjectProvider<DataSource> storageDataSourceProvider;
     private final StringRedisTemplate redisTemplate;
     private final ObjectProvider<OrderEventStreamConsumer> orderConsumerProvider;
     private final ObjectProvider<PaymentEventStreamConsumer> paymentConsumerProvider;
@@ -28,13 +28,13 @@ public class EventConsumerReadinessService {
 
     public EventConsumerReadinessService(
             @Qualifier("pipelineActualDataSource") DataSource pipelineDataSource,
-            @Qualifier("storageActualDataSource") DataSource storageDataSource,
+            @Qualifier("storageActualDataSource") ObjectProvider<DataSource> storageDataSourceProvider,
             StringRedisTemplate redisTemplate,
             ObjectProvider<OrderEventStreamConsumer> orderConsumerProvider,
             ObjectProvider<PaymentEventStreamConsumer> paymentConsumerProvider,
             EventStreamListenerRegistry listenerRegistry) {
         this.pipelineDataSource = pipelineDataSource;
-        this.storageDataSource = storageDataSource;
+        this.storageDataSourceProvider = storageDataSourceProvider;
         this.redisTemplate = redisTemplate;
         this.orderConsumerProvider = orderConsumerProvider;
         this.paymentConsumerProvider = paymentConsumerProvider;
@@ -47,7 +47,7 @@ public class EventConsumerReadinessService {
         boolean payment = contentType != null && contentType == ContentType.PAYMENT.getCode();
         checks.put("contentTypeSupported", order || payment);
         checks.put("pipelineDatabase", databaseReady(pipelineDataSource));
-        checks.put("storageDatabase", databaseReady(storageDataSource));
+        checks.put("storageDatabase", databaseReady(storageDataSourceProvider.getIfAvailable()));
         checks.put("redis", redisReady());
         if (order) {
             OrderEventStreamConsumer consumer = orderConsumerProvider.getIfAvailable();
@@ -62,6 +62,7 @@ public class EventConsumerReadinessService {
     }
 
     private static boolean databaseReady(DataSource dataSource) {
+        if (dataSource == null) return false;
         try (Connection connection = dataSource.getConnection()) {
             return connection.isValid(2);
         } catch (Exception e) {

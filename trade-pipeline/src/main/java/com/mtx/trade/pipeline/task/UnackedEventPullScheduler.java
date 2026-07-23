@@ -3,7 +3,7 @@ package com.mtx.trade.pipeline.task;
 import com.mtx.trade.common.enums.ContentType;
 import com.mtx.trade.common.utils.EnterpriseWechatRobotUtils;
 import com.mtx.trade.pipeline.config.EventConsumerConfiguration;
-import com.mtx.trade.pipeline.config.ExhaustedEventPullProperties;
+import com.mtx.trade.pipeline.config.UnackedEventPullProperties;
 import com.mtx.trade.pipeline.dto.OrderEventPullCommand;
 import com.mtx.trade.pipeline.dto.OrderEventPullResult;
 import com.mtx.trade.pipeline.dto.PaymentEventPullCommand;
@@ -22,30 +22,30 @@ import java.time.Duration;
 import java.util.function.Function;
 import java.util.function.LongFunction;
 
-/** 定时主动拉取 Ingress 已耗尽事件，作为 Redis Stream 投递链路的最终兜底。 */
+/** 定时主动拉取 Ingress 已未 ACK 事件，作为 Redis Stream 投递链路的最终兜底。 */
 @Slf4j
 @Service
 @RequiredArgsConstructor
-@ConditionalOnProperty(prefix = "trade.pipeline.exhausted-event-pull",
+@ConditionalOnProperty(prefix = "trade.pipeline.unacked-event-pull",
         name = "enabled", havingValue = "true", matchIfMissing = true)
-public class ExhaustedEventPullScheduler {
+public class UnackedEventPullScheduler {
 
     private static final int MAX_BATCH_SIZE = 500;
 
-    private final ExhaustedEventPullProperties properties;
+    private final UnackedEventPullProperties properties;
     private final EventPullLeaseService leaseService;
     private final OrderEventPullService orderEventPullService;
     private final PaymentEventPullService paymentEventPullService;
     private final EnterpriseWechatRobotUtils enterpriseWechatRobotUtils;
 
     @Scheduled(
-            initialDelayString = "${trade.pipeline.exhausted-event-pull.initial-delay-ms:60000}",
-            fixedDelayString = "${trade.pipeline.exhausted-event-pull.fixed-delay-ms:60000}",
-            scheduler = EventConsumerConfiguration.EXHAUSTED_PULL_SCHEDULER)
+            initialDelayString = "${trade.pipeline.unacked-event-pull.initial-delay-ms:60000}",
+            fixedDelayString = "${trade.pipeline.unacked-event-pull.fixed-delay-ms:60000}",
+            scheduler = EventConsumerConfiguration.UNACKED_PULL_SCHEDULER)
     public void pullOrders() {
         int contentType = ContentType.ORDER.getCode();
         if (!acquire(contentType)) {
-            log.debug("[Exhausted Event Pull] 🔄 Another Pipeline instance owns the order pull lease; "
+            log.debug("[Unacked Event Pull] 🔄 Another Pipeline instance owns the order pull lease; "
                     + "this run was skipped.");
             return;
         }
@@ -57,20 +57,20 @@ public class ExhaustedEventPullScheduler {
                     OrderEventPullResult::status,
                     OrderEventPullResult::message);
         } catch (Exception e) {
-            log.error("[Exhausted Event Pull] ❌ Order pull batch failed; the lease cursor remains recoverable.", e);
+            log.error("[Unacked Event Pull] ❌ Order pull batch failed; the lease cursor remains recoverable.", e);
         } finally {
             release(contentType);
         }
     }
 
     @Scheduled(
-            initialDelayString = "${trade.pipeline.exhausted-event-pull.initial-delay-ms:60000}",
-            fixedDelayString = "${trade.pipeline.exhausted-event-pull.fixed-delay-ms:60000}",
-            scheduler = EventConsumerConfiguration.EXHAUSTED_PULL_SCHEDULER)
+            initialDelayString = "${trade.pipeline.unacked-event-pull.initial-delay-ms:60000}",
+            fixedDelayString = "${trade.pipeline.unacked-event-pull.fixed-delay-ms:60000}",
+            scheduler = EventConsumerConfiguration.UNACKED_PULL_SCHEDULER)
     public void pullPayments() {
         int contentType = ContentType.PAYMENT.getCode();
         if (!acquire(contentType)) {
-            log.debug("[Exhausted Event Pull] 🔄 Another Pipeline instance owns the payment pull lease; "
+            log.debug("[Unacked Event Pull] 🔄 Another Pipeline instance owns the payment pull lease; "
                     + "this run was skipped.");
             return;
         }
@@ -82,7 +82,7 @@ public class ExhaustedEventPullScheduler {
                     PaymentEventPullResult::status,
                     PaymentEventPullResult::message);
         } catch (Exception e) {
-            log.error("[Exhausted Event Pull] ❌ Payment pull batch failed; the lease cursor remains recoverable.", e);
+            log.error("[Unacked Event Pull] ❌ Payment pull batch failed; the lease cursor remains recoverable.", e);
         } finally {
             release(contentType);
         }
@@ -91,7 +91,7 @@ public class ExhaustedEventPullScheduler {
     private int batchSize() {
         int batchSize = properties.getBatchSize();
         if (batchSize <= 0 || batchSize > MAX_BATCH_SIZE) {
-            throw new IllegalArgumentException("trade.pipeline.exhausted-event-pull.batch-size 必须为1~500");
+            throw new IllegalArgumentException("trade.pipeline.unacked-event-pull.batch-size 必须为1~500");
         }
         return batchSize;
     }
@@ -110,13 +110,13 @@ public class ExhaustedEventPullScheduler {
         long total = 0L;
         long failed = 0L;
 
-        log.debug("[Exhausted Event Pull] 🔄 Backlog drain started. type={}, batchSize={}, "
+        log.debug("[Unacked Event Pull] 🔄 Backlog drain started. type={}, batchSize={}, "
                         + "maxBatches={}, parallelism={}",
                 type, batchSize, maxBatches, properties.getParallelism());
         for (int batch = 1; batch <= maxBatches; batch++) {
             List<T> results = pullBatch.apply(cursor);
             if (results.isEmpty()) {
-                log.debug("[Exhausted Event Pull] ✅ Backlog drain completed. "
+                log.debug("[Unacked Event Pull] ✅ Backlog drain completed. "
                                 + "type={}, batches={}, total={}, succeeded={}, failed={}",
                         type, batch - 1, total, total - failed, failed);
                 return;
@@ -124,7 +124,7 @@ public class ExhaustedEventPullScheduler {
 
             long batchFailed = results.stream()
                     .map(status)
-                    .filter(ExhaustedEventPullScheduler::isFailed)
+                    .filter(UnackedEventPullScheduler::isFailed)
                     .count();
             long nextCursor = results.stream()
                     .map(eventId)
@@ -135,7 +135,7 @@ public class ExhaustedEventPullScheduler {
             total += results.size();
             failed += batchFailed;
             notifyTerminalFailures(type, batch, results, eventId, status, message);
-            log.debug("[Exhausted Event Pull] 🔄 Backlog batch completed. "
+            log.debug("[Unacked Event Pull] 🔄 Backlog batch completed. "
                             + "type={}, batch={}, batchTotal={}, batchFailed={}, cursor={}, total={}",
                     type, batch, results.size(), batchFailed, nextCursor, total);
 
@@ -144,26 +144,26 @@ public class ExhaustedEventPullScheduler {
                 return;
             }
             if (nextCursor <= cursor) {
-                log.error("[Exhausted Event Pull] ❌ Backlog cursor did not advance; this run was stopped "
+                log.error("[Unacked Event Pull] ❌ Backlog cursor did not advance; this run was stopped "
                                 + "to prevent a hot loop. type={}, cursor={}, batch={}",
                         type, cursor, batch);
                 return;
             }
             cursor = nextCursor;
             if (System.nanoTime() >= deadlineNanos) {
-                log.warn("[Exhausted Event Pull] 🔄 Run duration limit reached; remaining backlog will "
+                log.warn("[Unacked Event Pull] 🔄 Run duration limit reached; remaining backlog will "
                                 + "continue next run. type={}, batches={}, total={}, cursor={}",
                         type, batch, total, cursor);
                 return;
             }
             if (!leaseService.renew(contentType)) {
-                log.warn("[Exhausted Event Pull] 🔄 Pull lease could not be renewed; this run stopped before "
+                log.warn("[Unacked Event Pull] 🔄 Pull lease could not be renewed; this run stopped before "
                                 + "loading another batch. type={}, batches={}, total={}, cursor={}",
                         type, batch, total, cursor);
                 return;
             }
         }
-        log.warn("[Exhausted Event Pull] 🔄 Batch limit reached; remaining backlog will continue next run. "
+        log.warn("[Unacked Event Pull] 🔄 Batch limit reached; remaining backlog will continue next run. "
                         + "type={}, maxBatches={}, total={}, cursor={}",
                 type, maxBatches, total, cursor);
     }
@@ -171,7 +171,7 @@ public class ExhaustedEventPullScheduler {
     private int maxBatchesPerRun() {
         int value = properties.getMaxBatchesPerRun();
         if (value <= 0 || value > 1000) {
-            throw new IllegalArgumentException("trade.pipeline.exhausted-event-pull.max-batches-per-run 必须为1~1000");
+            throw new IllegalArgumentException("trade.pipeline.unacked-event-pull.max-batches-per-run 必须为1~1000");
         }
         return value;
     }
@@ -179,7 +179,7 @@ public class ExhaustedEventPullScheduler {
     private Duration maxRunDuration() {
         Duration value = properties.getMaxRunDuration();
         if (value == null || value.isZero() || value.isNegative()) {
-            throw new IllegalArgumentException("trade.pipeline.exhausted-event-pull.max-run-duration 必须为正数");
+            throw new IllegalArgumentException("trade.pipeline.unacked-event-pull.max-run-duration 必须为正数");
         }
         return value;
     }
@@ -188,7 +188,7 @@ public class ExhaustedEventPullScheduler {
         try {
             return leaseService.tryAcquire(contentType);
         } catch (Exception e) {
-            log.error("[Exhausted Event Pull] ❌ Pull lease acquisition failed; this run was skipped. "
+            log.error("[Unacked Event Pull] ❌ Pull lease acquisition failed; this run was skipped. "
                     + "contentType={}", contentType, e);
             return false;
         }
@@ -198,18 +198,18 @@ public class ExhaustedEventPullScheduler {
         try {
             leaseService.release(contentType);
         } catch (Exception e) {
-            log.warn("[Exhausted Event Pull] 🔄 Pull lease release failed; lease expiry will release it. "
+            log.warn("[Unacked Event Pull] 🔄 Pull lease release failed; lease expiry will release it. "
                     + "contentType={}", contentType, e);
         }
     }
 
     private static void logCompletion(String type, int batches, long total, long failed) {
         if (failed == 0) {
-            log.info("[Exhausted Event Pull] ✅ Backlog drain completed. "
+            log.info("[Unacked Event Pull] ✅ Backlog drain completed. "
                             + "type={}, batches={}, total={}, succeeded={}, failed=0",
                     type, batches, total, total);
         } else {
-            log.error("[Exhausted Event Pull] ❌ Backlog drain completed with failures; failed events remain "
+            log.error("[Unacked Event Pull] ❌ Backlog drain completed with failures; failed events remain "
                             + "eligible for the next sweep. type={}, batches={}, total={}, succeeded={}, failed={}",
                     type, batches, total, total - failed, failed);
         }
@@ -241,7 +241,7 @@ public class ExhaustedEventPullScheduler {
                         + abbreviate(message.apply(result), 240))
                 .collect(java.util.stream.Collectors.joining("\n"));
         enterpriseWechatRobotUtils.sendTextQuietly(
-                "[Trade Pipeline] Exhausted event terminal failures\n"
+                "[Trade Pipeline] Unacknowledged event terminal failures\n"
                         + "type=" + type + ", batch=" + batch
                         + ", count=" + terminalFailures.size() + "\n"
                         + details);

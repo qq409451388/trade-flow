@@ -1,7 +1,7 @@
 package com.mtx.trade.pipeline.service;
 
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
-import com.mtx.trade.pipeline.config.ExhaustedEventPullProperties;
+import com.mtx.trade.pipeline.config.UnackedEventPullProperties;
 import com.mtx.trade.pipeline.entity.EventPullControlDO;
 import com.mtx.trade.pipeline.service.db.EventPullControlDbService;
 import lombok.RequiredArgsConstructor;
@@ -16,7 +16,7 @@ import java.util.UUID;
 public class EventPullLeaseService {
 
     private final EventPullControlDbService controlDbService;
-    private final ExhaustedEventPullProperties properties;
+    private final UnackedEventPullProperties properties;
     private final String owner = "pipeline-pull-" + UUID.randomUUID();
 
     public boolean tryAcquire(int contentType) {

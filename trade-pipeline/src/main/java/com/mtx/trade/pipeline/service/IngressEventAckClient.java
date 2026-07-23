@@ -10,8 +10,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 
 import java.net.Proxy;
+import java.util.List;
 
-/** Pipeline 持久化完成后通知 Ingress 停止补发事件。 */
+/** Pipeline 持久化完成后通知 Ingress 完成事件接管。 */
 @Service
 public class IngressEventAckClient {
 
@@ -45,6 +46,23 @@ public class IngressEventAckClient {
         }
     }
 
+    public void batchAck(int contentType, List<Long> eventIds) {
+        if (eventIds == null || eventIds.isEmpty()) {
+            return;
+        }
+        ResponseData<?> response = restClient.post()
+                .uri(properties.getIngressBatchAckUrl())
+                .contentType(MediaType.APPLICATION_JSON).accept(MediaType.APPLICATION_JSON)
+                .body(new EventBatchAckCommand(contentType, eventIds)).retrieve().body(ResponseData.class);
+        if (response == null || response.getCode() == null || response.getCode() != ErrorCode.SUCCESS.getCode()) {
+            throw new BusinessException(ErrorCode.DATA_CREATE_ERROR,
+                    "Ingress event批量ACK失败: " + (response == null ? "empty response" : response.getMessage()));
+        }
+    }
+
     private record EventAckCommand(Integer contentType, Long eventId) {
+    }
+
+    private record EventBatchAckCommand(Integer contentType, List<Long> eventIds) {
     }
 }

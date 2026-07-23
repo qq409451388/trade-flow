@@ -15,7 +15,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 
-/** Pipeline 主动恢复投递耗尽订单事件。 */
+/** Pipeline 主动恢复未 ACK订单事件。 */
 @Slf4j
 @RestController
 @RequestMapping("/order-event")
@@ -31,7 +31,7 @@ public class OrderEventPullController {
         } catch (BusinessException e) {
             return ResponseData.fail(e.getCode(), e.getMessage(), null);
         } catch (Exception e) {
-            log.error("[Exhausted Event Pull] ❌ Manual order pull request failed.", e);
+            log.error("[Unacked Event Pull] ❌ Manual order pull request failed.", e);
             return ResponseData.fail(ErrorCode.SYSTEM_ERROR);
         }
     }

@@ -25,14 +25,10 @@ public class EventDeliveryControlDO implements Serializable {
     private LocalDateTime openedTime;
     private LocalDateTime nextHealthCheckTime;
     private Integer healthSuccessCount;
-    private Integer pipelineFailureCount;
-    private Long probeEventId;
     private LocalDateTime lastFailureTime;
     private String lastFailureReason;
     private String recoveryOwner;
     private LocalDateTime recoveryLeaseUntil;
-    private Long recoveryCursorId;
-    private Long recoveryCutoffId;
     private Integer version;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;

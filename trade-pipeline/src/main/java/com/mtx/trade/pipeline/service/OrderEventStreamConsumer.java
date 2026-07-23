@@ -161,23 +161,25 @@ public class OrderEventStreamConsumer {
             return;
         }
 
+        boolean ingressAcked = false;
         try {
             ingressEventAckClient.ack(event.contentType(), event.eventId());
+            ingressAcked = true;
         } catch (Exception e) {
             recordIngressAckFailure(processLogId, e);
-            log.error("[Ingress ACK] ❌ Order was persisted but Ingress ACK failed; message remains in PEL. "
+            log.warn("[Ingress ACK] 🔄 Order was persisted but Ingress ACK failed; Redis will be XACKed and "
+                            + "the unacknowledged event will be recovered by the scheduled pull. "
                             + "recordId={}, eventId={}, storageId={}, eventKey={}",
                     recordId, event.eventId(), event.storageId(), event.eventKey(), e);
-            return;
         }
-        try {
-            processLogService.recordIngressAck(processLogId, true);
-        } catch (Exception e) {
-            log.error("[Processing Audit] ❌ Successful order Ingress ACK could not be recorded; message remains "
-                            + "in PEL. "
-                            + "processLogId={}, recordId={}, eventId={}",
-                    processLogId, recordId, event.eventId(), e);
-            return;
+        if (ingressAcked) {
+            try {
+                processLogService.recordIngressAck(processLogId, true);
+            } catch (Exception e) {
+                log.error("[Processing Audit] ❌ Successful order Ingress ACK status could not be recorded; "
+                                + "the durable success audit remains authoritative. processLogId={}, recordId={}, eventId={}",
+                        processLogId, recordId, event.eventId(), e);
+            }
         }
         acknowledge(record, processLogId);
         log.debug("[Stream Consumer] ✅ Order event completed. recordId={}, eventId={}, storageId={}, "
@@ -215,9 +217,13 @@ public class OrderEventStreamConsumer {
     private void acknowledge(MapRecord<String, ?, ?> record, long processLogId) {
         boolean succeeded = false;
         try {
-            redisTemplate.opsForStream().acknowledge(
+            Long acknowledged = redisTemplate.opsForStream().acknowledge(
                     properties.getStreamKey(), properties.getGroup(), record.getId());
-            succeeded = true;
+            succeeded = acknowledged != null && acknowledged > 0;
+            if (!succeeded) {
+                log.warn("[Redis XACK] 🔄 Order XACK affected no pending record; the record will not be deleted. "
+                        + "recordId={}", record.getId().getValue());
+            }
         } catch (Exception e) {
             log.error("[Redis XACK] ❌ Order XACK failed; record remains recoverable in PEL. recordId={}",
                     record.getId().getValue(), e);

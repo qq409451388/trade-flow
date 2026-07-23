@@ -18,17 +18,11 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 public class EventDeliveryConfiguration {
 
     public static final String EVENT_RETRY_SCHEDULER = "eventRetryTaskScheduler";
-    public static final String EVENT_REDELIVERY_SCHEDULER = "eventRedeliveryTaskScheduler";
     public static final String CIRCUIT_RECOVERY_SCHEDULER = "circuitRecoveryTaskScheduler";
 
     @Bean(name = EVENT_RETRY_SCHEDULER)
     public ThreadPoolTaskScheduler eventRetryTaskScheduler() {
         return scheduler(2, "event-retry-");
-    }
-
-    @Bean(name = EVENT_REDELIVERY_SCHEDULER)
-    public ThreadPoolTaskScheduler eventRedeliveryTaskScheduler() {
-        return scheduler(1, "event-redelivery-");
     }
 
     @Bean(name = CIRCUIT_RECOVERY_SCHEDULER)

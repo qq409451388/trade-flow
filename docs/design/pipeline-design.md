@@ -7,7 +7,7 @@
 `StorageReader` 使用独立的只读 Storage 数据源。两套数据源、事务管理器和分片规则不得混用。
 
 当前已实现订单和支付 Redis Stream 消费、跨 consumer PEL 回收、Storage 原文读取、结构化业务落库、
-独立处理审计、Ingress ACK 和投递耗尽事件主动拉取。
+独立处理审计、Ingress ACK 和投递未 ACK 事件主动拉取。
 
 ## 2. 订单事件处理链路
 
@@ -16,11 +16,10 @@
 3. 通过 `(storageId, storageSha256)` 从 Storage 读取元数据和原始 JSON，并再次校验来源与类型。
 4. 校验事件 `messageVersion` 必须等于原文 `recUpdTm`。
 5. 每个事件使用独立的 `pipelineTransactionManager` 事务更新订单快照并全量替换子表。
-6. Pipeline 事务提交后调用 Ingress `/event/ack`。
-7. 处理成功时先记录Pipeline处理流水，再ACK Ingress，最后执行Redis `XACK`；处理已经成功但流水或Ingress ACK失败时，
-   消息保留在PEL用于完成接管收尾。
-8. 已明确捕获的业务处理失败使用独立事务记录失败流水，随后只执行Redis `XACK`，不ACK Ingress，等待Ingress
-   按既定6次投递规则再次发布。失败流水也无法落库时保留PEL，防止静默丢失。
+6. Pipeline 事务提交后可靠记录处理审计，再调用 Ingress `/event/ack`。
+7. 业务成功但 Ingress ACK 失败时仍执行 Redis `XACK`；Ingress 保持 `acked=0`，由定时补拉仅补 ACK。
+8. 已明确捕获的业务失败使用独立事务记录失败流水，随后执行 Redis `XACK`，不 ACK Ingress，等待下一轮未 ACK 补拉。
+   失败流水无法落库时保留 PEL，防止静默丢失。
 9. 定时通过 `XPENDING + XCLAIM` 接管超过 `pending-min-idle` 的消息，包含其他宕机 consumer 的 PEL；PEL
    只承担处理中断恢复，不承担无限业务重试。
 
@@ -84,27 +83,25 @@ Pipeline 业务事务显式使用 `pipelineTransactionManager`，不得将 Pipel
 
 已确认并实现：
 
-- 不建设 Dead Letter Stream。Ingress 未 ACK 且自动补发耗尽的 event 记录是持久化待处理事实，
-  Pipeline 后续提供主动拉取接口，直接读取 Storage 并处理；Ingress 人工重发接口保留为备用通道。
+- 不建设 Dead Letter Stream。Ingress 未 ACK event 是持久化待处理事实，Pipeline 定时批量拉取并直接处理。
 - Pipeline 已明确捕获的业务处理失败应记录执行失败、XACK 当前 Redis 消息，但不 ACK Ingress，
-  等待 Ingress 下一次投递。PEL 只用于接管消费过程中宕机、尚未形成处理结果的消息，避免 PEL 无限业务重试
-  绕过 Ingress 的6次自动投递上限。
+  等待下一轮未 ACK 补拉。PEL 只用于处理中断、审计落库失败和 Redis XACK 失败。
 - `pipeline_order_event_log` 每次实际处理写一条独立流水，记录Stream、PEL接管或主动拉取、处理结果、
   失败阶段、错误码、原因和耗时。失败流水无法落库时不XACK，确保该失败不会静默消失。
-- `POST /order-event/pull` 可按event ID或批量主动拉取Ingress耗尽事件，直接读取Storage并处理，
+- `POST /order-event/pull` 可按event ID或批量主动拉取Ingress未 ACK 事件，直接读取Storage并处理，
   成功后ACK Ingress，不经过Redis。
-- Pipeline 默认每分钟按订单、支付通道各启动一次耗尽积压排空；按 event ID 游标连续拉取，每批500条，
+- Pipeline 默认每分钟按订单、支付通道各启动一次未 ACK 批量排空；按 event ID 游标连续拉取，每批500条，
   单轮最多100批或10分钟，批内共享4线程有界执行器。MySQL租约按批续期以避免多实例重复执行；失败 event
   不阻塞同一轮的后续 event，作为Redis Stream记录被误删后的最终自动恢复路径。
 - 主动拉取连续失败默认最多3次。前两次保持Ingress未ACK；第三次在失败审计可靠落库后ACK Ingress，形成
   `process_status=FAILED + ingress_ack_status=SUCCEEDED` 的人工处理终态，并按批汇总发送企业微信告警。
-- Pipeline提供 `/readiness/event-consumer`，按内容类型检查Pipeline数据库、Storage数据源、Redis和consumer group，
-供Ingress熔断恢复使用。
+- Pipeline 提供 `/readiness/event-consumer` 监控 Pipeline 数据库、Storage 数据源、Redis、consumer group 和订阅状态；
+  readiness 不参与 Ingress 发布状态或数据正确性。
 
 支付事件采用相同的可靠投递闭环：`stream:payment-event` + `trade-pipeline-payment` 消费组，处理结果写入
 `pipeline_payment_event_log`。支付流水以 `paySsn` 为不可变幂等键：相同 SHA 为幂等成功，不同 SHA 记为
 `PAYMENT_PAYLOAD_CONFLICT` 且不覆盖原记录。支付主表和结算账户通过同一个强制年份 Hint 路由并在单事务提交；
-支付通道可通过 `POST /payment-event/pull` 主动拉取 Ingress 已耗尽事件。
+支付通道可通过 `POST /payment-event/pull` 主动拉取 Ingress 未 ACK 事件。
 
 仍待业务确认：
 

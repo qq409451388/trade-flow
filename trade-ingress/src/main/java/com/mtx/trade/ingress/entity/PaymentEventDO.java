@@ -61,16 +61,6 @@ public class PaymentEventDO implements Serializable {
     private LocalDateTime ackedTime;
 
     /**
-     * 15分钟后定时补发成功次数
-     */
-    private Integer autoRedeliveryCount;
-
-    /**
-     * 最近一次定时补发成功时间
-     */
-    private LocalDateTime lastRedeliveryTime;
-
-    /**
      * 原始数据接收时间
      */
     private LocalDateTime receivedTime;

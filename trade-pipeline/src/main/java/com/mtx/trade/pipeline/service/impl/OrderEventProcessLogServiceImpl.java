@@ -1,6 +1,7 @@
 package com.mtx.trade.pipeline.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.mtx.trade.common.enums.ErrorCode;
 import com.mtx.trade.common.exception.BusinessException;
 import com.mtx.trade.pipeline.dto.OrderEventMessage;
@@ -16,6 +17,11 @@ import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.concurrent.TimeUnit;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /** Pipeline 订单事件处理日志实现。 */
 @Service
@@ -93,6 +99,54 @@ public class OrderEventProcessLogServiceImpl implements OrderEventProcessLogServ
                 .eq(OrderEventProcessLogDO::getEventId, eventId)
                 .eq(OrderEventProcessLogDO::getTriggerType, TRIGGER_ACTIVE_PULL)
                 .eq(OrderEventProcessLogDO::getProcessStatus, STATUS_FAILED));
+    }
+
+    @Override
+    public Set<Long> findAckOnlyEventIds(List<Long> eventIds, int terminalFailureAttempts) {
+        if (eventIds == null || eventIds.isEmpty()) {
+            return Set.of();
+        }
+        if (terminalFailureAttempts <= 0) {
+            throw new IllegalArgumentException("terminalFailureAttempts必须为正数");
+        }
+        List<OrderEventProcessLogDO> logs = processLogDbService.list(
+                new LambdaQueryWrapper<OrderEventProcessLogDO>()
+                        .select(OrderEventProcessLogDO::getEventId,
+                                OrderEventProcessLogDO::getProcessStatus,
+                                OrderEventProcessLogDO::getTriggerType)
+                        .in(OrderEventProcessLogDO::getEventId, eventIds)
+                        .and(query -> query
+                                .in(OrderEventProcessLogDO::getProcessStatus, STATUS_APPLIED, STATUS_IGNORED)
+                                .or(failure -> failure
+                                        .eq(OrderEventProcessLogDO::getTriggerType, TRIGGER_ACTIVE_PULL)
+                                        .eq(OrderEventProcessLogDO::getProcessStatus, STATUS_FAILED))));
+        Set<Long> ackOnly = new HashSet<>();
+        Map<Long, Integer> activePullFailures = new HashMap<>();
+        for (OrderEventProcessLogDO log : logs) {
+            if (log.getProcessStatus() == STATUS_APPLIED || log.getProcessStatus() == STATUS_IGNORED) {
+                ackOnly.add(log.getEventId());
+            } else if (log.getTriggerType() == TRIGGER_ACTIVE_PULL
+                    && log.getProcessStatus() == STATUS_FAILED) {
+                activePullFailures.merge(log.getEventId(), 1, Integer::sum);
+            }
+        }
+        activePullFailures.forEach((eventId, attempts) -> {
+            if (attempts >= terminalFailureAttempts) ackOnly.add(eventId);
+        });
+        return ackOnly;
+    }
+
+    @Override
+    @Transactional(transactionManager = "pipelineTransactionManager",
+            propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
+    public void recordIngressAckByEventIds(List<Long> eventIds, boolean succeeded) {
+        if (eventIds == null || eventIds.isEmpty()) return;
+        processLogDbService.update(new LambdaUpdateWrapper<OrderEventProcessLogDO>()
+                .in(OrderEventProcessLogDO::getEventId, eventIds)
+                .ne(OrderEventProcessLogDO::getIngressAckStatus, DELIVERY_SUCCEEDED)
+                .set(OrderEventProcessLogDO::getIngressAckStatus,
+                        succeeded ? DELIVERY_SUCCEEDED : DELIVERY_FAILED)
+                .set(OrderEventProcessLogDO::getIngressAckTime, succeeded ? LocalDateTime.now() : null));
     }
 
     private OrderEventProcessLogDO base(

@@ -53,9 +53,10 @@ trade:
       reclaim-delay: 30000
       pending-min-idle: 1m
       ingress-ack-url: ${INGRESS_ACK_URL:http://127.0.0.1:8115/trade-ingress/event/ack}
+      ingress-batch-ack-url: ${INGRESS_BATCH_ACK_URL:http://127.0.0.1:8115/trade-ingress/event/batch-ack}
       ingress-ack-connect-timeout: 3s
       ingress-ack-read-timeout: 5s
-      ingress-exhausted-url: ${INGRESS_EXHAUSTED_URL:http://127.0.0.1:8115/trade-ingress/event/redelivery-exhausted}
+      ingress-unacked-url: ${INGRESS_UNACKED_URL:http://127.0.0.1:8115/trade-ingress/event/unacked}
     payment-event-consumer:
       enabled: true
       stream-key: stream:payment-event
@@ -66,7 +67,7 @@ trade:
       listener-watchdog-delay: 5000
       reclaim-delay: 30000
       pending-min-idle: 1m
-    exhausted-event-pull:
+    unacked-event-pull:
       enabled: true
       initial-delay-ms: 60000
       fixed-delay-ms: 60000

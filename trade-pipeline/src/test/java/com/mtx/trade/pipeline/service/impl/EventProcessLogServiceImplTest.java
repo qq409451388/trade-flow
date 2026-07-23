@@ -1,5 +1,6 @@
 package com.mtx.trade.pipeline.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.mtx.trade.common.enums.ContentType;
 import com.mtx.trade.pipeline.dto.OrderEventMessage;
 import com.mtx.trade.pipeline.dto.PaymentEventMessage;
@@ -17,8 +18,12 @@ import java.lang.reflect.Proxy;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class EventProcessLogServiceImplTest {
 
@@ -61,6 +66,25 @@ class EventProcessLogServiceImplTest {
                 .isEqualTo(PaymentEventProcessLogService.DELIVERY_NOT_APPLICABLE);
     }
 
+    @Test
+    void shouldTreatSuccessfulAndTerminalAuditsAsAckOnly() {
+        OrderEventProcessLogDbService dbService = mock(OrderEventProcessLogDbService.class);
+        when(dbService.list(any(Wrapper.class))).thenReturn(List.of(
+                orderLog(1L, OrderEventProcessLogService.STATUS_APPLIED,
+                        OrderEventProcessLogService.TRIGGER_STREAM),
+                orderLog(2L, OrderEventProcessLogService.STATUS_FAILED,
+                        OrderEventProcessLogService.TRIGGER_ACTIVE_PULL),
+                orderLog(2L, OrderEventProcessLogService.STATUS_FAILED,
+                        OrderEventProcessLogService.TRIGGER_ACTIVE_PULL),
+                orderLog(3L, OrderEventProcessLogService.STATUS_FAILED,
+                        OrderEventProcessLogService.TRIGGER_ACTIVE_PULL)));
+        OrderEventProcessLogServiceImpl service = new OrderEventProcessLogServiceImpl(dbService);
+
+        Set<Long> ackOnly = service.findAckOnlyEventIds(List.of(1L, 2L, 3L), 2);
+
+        assertThat(ackOnly).containsExactlyInAnyOrder(1L, 2L);
+    }
+
     @SuppressWarnings("unchecked")
     private static <S, E> S stub(Class<S> serviceType, List<E> saved, List<E> updated, long id) {
         return (S) Proxy.newProxyInstance(serviceType.getClassLoader(), new Class<?>[]{serviceType},
@@ -91,5 +115,13 @@ class EventProcessLogServiceImplTest {
     private static PaymentEventMessage paymentEvent() {
         return new PaymentEventMessage(1L, 2L, new byte[32], "payment-1", 1,
                 ContentType.PAYMENT.getCode(), 3L);
+    }
+
+    private static OrderEventProcessLogDO orderLog(long eventId, int status, int triggerType) {
+        OrderEventProcessLogDO log = new OrderEventProcessLogDO();
+        log.setEventId(eventId);
+        log.setProcessStatus(status);
+        log.setTriggerType(triggerType);
+        return log;
     }
 }

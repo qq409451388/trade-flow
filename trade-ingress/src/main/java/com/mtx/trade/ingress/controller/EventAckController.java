@@ -4,6 +4,8 @@ import com.mtx.trade.common.dto.ResponseData;
 import com.mtx.trade.common.enums.ErrorCode;
 import com.mtx.trade.common.exception.BusinessException;
 import com.mtx.trade.ingress.dto.EventAckCommand;
+import com.mtx.trade.ingress.dto.EventBatchAckCommand;
+import com.mtx.trade.ingress.dto.EventBatchAckResult;
 import com.mtx.trade.ingress.service.EventAckService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -44,6 +46,20 @@ public class EventAckController {
         } catch (Exception e) {
             log.error("[Ingress ACK] ❌ Event acknowledgement failed; the event remains unacknowledged. "
                     + "command={}", command, e);
+            return ResponseData.fail(ErrorCode.SYSTEM_ERROR);
+        }
+    }
+
+    @PostMapping("/batch-ack")
+    public ResponseData<EventBatchAckResult> batchAck(@RequestBody EventBatchAckCommand command) {
+        try {
+            return ResponseData.success(eventAckService.batchAck(
+                    command == null ? null : command.contentType(),
+                    command == null ? null : command.eventIds()));
+        } catch (BusinessException e) {
+            return ResponseData.fail(e.getCode(), e.getMessage(), null);
+        } catch (Exception e) {
+            log.error("[Ingress ACK] ❌ Batch acknowledgement failed; events remain recoverable. command={}", command, e);
             return ResponseData.fail(ErrorCode.SYSTEM_ERROR);
         }
     }

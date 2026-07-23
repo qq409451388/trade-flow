@@ -2,7 +2,7 @@ package com.mtx.trade.ingress.dto;
 
 import java.time.LocalDateTime;
 
-/** 自动补发已耗尽的事件。 */
+/** Pipeline补拉使用的未 ACK 事件。 */
 public record EventDeliveryVO(
         Integer contentType,
         Long eventId,
@@ -11,7 +11,5 @@ public record EventDeliveryVO(
         Long messageVersion,
         Long storageId,
         String storageSha256,
-        Integer autoRedeliveryCount,
-        LocalDateTime lastRedeliveryTime,
         LocalDateTime createTime) {
 }

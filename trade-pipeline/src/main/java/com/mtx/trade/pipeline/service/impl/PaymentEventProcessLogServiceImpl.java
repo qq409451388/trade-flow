@@ -1,6 +1,7 @@
 package com.mtx.trade.pipeline.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.mtx.trade.common.enums.ErrorCode;
 import com.mtx.trade.common.exception.BusinessException;
 import com.mtx.trade.pipeline.dto.PaymentEventMessage;
@@ -16,6 +17,11 @@ import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.concurrent.TimeUnit;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /** 支付事件处理日志独立事务实现。 */
 @Service
@@ -89,6 +95,54 @@ public class PaymentEventProcessLogServiceImpl implements PaymentEventProcessLog
                 .eq(PaymentEventProcessLogDO::getEventId, eventId)
                 .eq(PaymentEventProcessLogDO::getTriggerType, TRIGGER_ACTIVE_PULL)
                 .eq(PaymentEventProcessLogDO::getProcessStatus, STATUS_FAILED));
+    }
+
+    @Override
+    public Set<Long> findAckOnlyEventIds(List<Long> eventIds, int terminalFailureAttempts) {
+        if (eventIds == null || eventIds.isEmpty()) {
+            return Set.of();
+        }
+        if (terminalFailureAttempts <= 0) {
+            throw new IllegalArgumentException("terminalFailureAttempts必须为正数");
+        }
+        List<PaymentEventProcessLogDO> logs = processLogDbService.list(
+                new LambdaQueryWrapper<PaymentEventProcessLogDO>()
+                        .select(PaymentEventProcessLogDO::getEventId,
+                                PaymentEventProcessLogDO::getProcessStatus,
+                                PaymentEventProcessLogDO::getTriggerType)
+                        .in(PaymentEventProcessLogDO::getEventId, eventIds)
+                        .and(query -> query
+                                .in(PaymentEventProcessLogDO::getProcessStatus, STATUS_APPLIED, STATUS_IGNORED)
+                                .or(failure -> failure
+                                        .eq(PaymentEventProcessLogDO::getTriggerType, TRIGGER_ACTIVE_PULL)
+                                        .eq(PaymentEventProcessLogDO::getProcessStatus, STATUS_FAILED))));
+        Set<Long> ackOnly = new HashSet<>();
+        Map<Long, Integer> activePullFailures = new HashMap<>();
+        for (PaymentEventProcessLogDO log : logs) {
+            if (log.getProcessStatus() == STATUS_APPLIED || log.getProcessStatus() == STATUS_IGNORED) {
+                ackOnly.add(log.getEventId());
+            } else if (log.getTriggerType() == TRIGGER_ACTIVE_PULL
+                    && log.getProcessStatus() == STATUS_FAILED) {
+                activePullFailures.merge(log.getEventId(), 1, Integer::sum);
+            }
+        }
+        activePullFailures.forEach((eventId, attempts) -> {
+            if (attempts >= terminalFailureAttempts) ackOnly.add(eventId);
+        });
+        return ackOnly;
+    }
+
+    @Override
+    @Transactional(transactionManager = "pipelineTransactionManager",
+            propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
+    public void recordIngressAckByEventIds(List<Long> eventIds, boolean succeeded) {
+        if (eventIds == null || eventIds.isEmpty()) return;
+        processLogDbService.update(new LambdaUpdateWrapper<PaymentEventProcessLogDO>()
+                .in(PaymentEventProcessLogDO::getEventId, eventIds)
+                .ne(PaymentEventProcessLogDO::getIngressAckStatus, DELIVERY_SUCCEEDED)
+                .set(PaymentEventProcessLogDO::getIngressAckStatus,
+                        succeeded ? DELIVERY_SUCCEEDED : DELIVERY_FAILED)
+                .set(PaymentEventProcessLogDO::getIngressAckTime, succeeded ? LocalDateTime.now() : null));
     }
 
     private PaymentEventProcessLogDO base(

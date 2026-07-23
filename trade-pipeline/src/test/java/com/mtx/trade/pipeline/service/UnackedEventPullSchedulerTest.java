@@ -2,9 +2,9 @@ package com.mtx.trade.pipeline.service;
 
 import com.mtx.trade.common.enums.ContentType;
 import com.mtx.trade.common.utils.EnterpriseWechatRobotUtils;
-import com.mtx.trade.pipeline.config.ExhaustedEventPullProperties;
+import com.mtx.trade.pipeline.config.UnackedEventPullProperties;
 import com.mtx.trade.pipeline.dto.OrderEventPullResult;
-import com.mtx.trade.pipeline.task.ExhaustedEventPullScheduler;
+import com.mtx.trade.pipeline.task.UnackedEventPullScheduler;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -19,7 +19,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
-class ExhaustedEventPullSchedulerTest {
+class UnackedEventPullSchedulerTest {
 
     @Mock
     private EventPullLeaseService leaseService;
@@ -30,13 +30,13 @@ class ExhaustedEventPullSchedulerTest {
     @Mock
     private EnterpriseWechatRobotUtils enterpriseWechatRobotUtils;
 
-    private ExhaustedEventPullScheduler scheduler;
+    private UnackedEventPullScheduler scheduler;
 
     @BeforeEach
     void setUp() {
-        ExhaustedEventPullProperties properties = new ExhaustedEventPullProperties();
+        UnackedEventPullProperties properties = new UnackedEventPullProperties();
         properties.setBatchSize(100);
-        scheduler = new ExhaustedEventPullScheduler(
+        scheduler = new UnackedEventPullScheduler(
                 properties, leaseService, orderEventPullService, paymentEventPullService,
                 enterpriseWechatRobotUtils);
     }

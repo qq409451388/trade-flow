@@ -57,7 +57,6 @@ public class PaymentEventServiceImpl implements PaymentEventService {
         entity.setRawId(rawId);
         entity.setPayloadSha256(payloadSha256);
         entity.setAcked(EventAckStatus.INIT.getCode());
-        entity.setAutoRedeliveryCount(0);
         entity.setReceivedTime(LocalDateTime.now());
         return entity;
     }
