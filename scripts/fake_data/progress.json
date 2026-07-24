@@ -1,0 +1,11 @@
+{
+  "current_date": "2026-01-01",
+  "daily_seq": 33000,
+  "completed_dates": [],
+  "total_sent": 70917,
+  "total_order_sent": 33000,
+  "total_pay_sent": 37917,
+  "total_order_fail": 0,
+  "total_pay_fail": 0,
+  "last_save": "2026-07-24T17:11:43.914068"
+}
