@@ -2,7 +2,7 @@
 
 此目录存放项目相关的单文件临时工具。
 
-- `replay-fuiou-push.sh`：按时间范围流式读取线上富友推送日志，边读取边回放到本机 Ingress，并每 2 秒输出读取、请求中、成功及失败数量。运行时会输出临时调试目录，其中 `active/` 是正在发送的 JSON，`results/` 保存已完成请求的 HTTP 状态和响应体；失败或中断时保留该目录。
+- `replay-fuiou-push.sh`：按时间范围流式读取线上富友推送日志，边读取边回放到本机 Ingress，并每 2 秒输出读取、请求中、成功及失败数量。`REPLAY_RPS` 使用请求发射前的全局节拍器，不把 HTTP 响应耗时叠加到限速间隔；超时、断连和5xx默认额外重试2次，可通过 `REPLAY_TRANSPORT_RETRIES=0~5` 调整。运行时会输出临时调试目录，其中 `active/` 是正在发送的 JSON，`results/` 保存 payload SHA、传输重试状态、HTTP 状态、响应体及 curl 错误；失败或中断时保留该目录。
 - `verify-replay-idempotency.sh`：按与回放相同的源时间范围重新只读提取幂等键和 SHA，分别校验订单或支付在 Ingress event、Pipeline 年度业务表中的缺失、重复、版本落后及原文冲突；默认等待 Pipeline 最多 120 秒完成消费。
 - `reset-trade-databases.sh`：使用 `TRUNCATE TABLE` 清空本机 `trade_flow`、`trade_pipeline` 数据并恢复必要种子记录。
 

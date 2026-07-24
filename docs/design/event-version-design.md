@@ -89,9 +89,11 @@ POST /trade-ingress/event/batch-ack
 
 ## 6. 并发与终态
 
-- 30秒实时缓冲期降低实时 Consumer 与补拉同时处理同一事件的概率。
+- 2分钟实时缓冲期降低实时 Consumer 短时积压时与补拉同时处理同一事件的概率。
 - 多 Pipeline 实例通过 `pipeline_event_pull_control` 保证每个内容类型只有一个补拉 sweep。
 - 订单更新使用带版本条件的原子 UPDATE；竞争失败的旧版本按 IGNORED 收敛，不能覆盖新版本。
+- 新订单不执行空范围子表 DELETE；订单更新先解析旧记录主键，再携带主键和分片条件精确删除，避免
+  `order_no` 范围 DELETE 的 InnoDB gap lock。瞬时死锁会在全新事务中有限重试。
 - 支付通过 `paySsn` 唯一约束和 SHA 比较保证不可变幂等。
 - 主动补拉连续失败达到阈值后，先可靠写失败审计，再批量 ACK 形成人工终态，并按批汇总企微告警。
 - 审计、失败次数查询或 ACK 失败时保持可恢复状态。

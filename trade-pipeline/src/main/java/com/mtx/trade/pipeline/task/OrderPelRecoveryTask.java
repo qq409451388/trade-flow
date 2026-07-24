@@ -1,7 +1,7 @@
 package com.mtx.trade.pipeline.task;
 
 import com.mtx.trade.pipeline.config.EventConsumerConfiguration;
-import com.mtx.trade.pipeline.service.OrderEventStreamConsumer;
+import com.mtx.trade.pipeline.event.consumer.OrderEventStreamConsumer;
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;

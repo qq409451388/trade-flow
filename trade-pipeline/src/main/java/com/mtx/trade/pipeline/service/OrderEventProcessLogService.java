@@ -1,6 +1,7 @@
 package com.mtx.trade.pipeline.service;
 
 import com.mtx.trade.pipeline.dto.OrderEventMessage;
+import com.mtx.trade.pipeline.enums.OrderPersistResult;
 
 import java.time.LocalDateTime;
 import java.util.List;

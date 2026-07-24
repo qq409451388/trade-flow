@@ -1,4 +1,4 @@
-package com.mtx.trade.pipeline.service;
+package com.mtx.trade.pipeline.event.processor;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;

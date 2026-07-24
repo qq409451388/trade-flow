@@ -1,4 +1,4 @@
-package com.mtx.trade.pipeline.service;
+package com.mtx.trade.pipeline.exception;
 
 /** 携带明确处理阶段的订单事件异常。 */
 public class OrderEventProcessingException extends RuntimeException {

@@ -3,9 +3,10 @@ package com.mtx.trade.pipeline.config;
 import com.mtx.trade.common.utils.EnterpriseWechatRobotUtils;
 import com.mtx.trade.common.utils.SpringUtils;
 import com.mtx.trade.common.enums.ContentType;
-import com.mtx.trade.pipeline.service.EventStreamListenerRegistry;
-import com.mtx.trade.pipeline.service.OrderEventStreamConsumer;
-import com.mtx.trade.pipeline.service.PaymentEventStreamConsumer;
+import com.mtx.trade.pipeline.event.consumer.EventStreamListenerRegistry;
+import com.mtx.trade.pipeline.event.consumer.OrderEventStreamConsumer;
+import com.mtx.trade.pipeline.event.consumer.PartitionedEventExecutor;
+import com.mtx.trade.pipeline.event.consumer.PaymentEventStreamConsumer;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -30,6 +31,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
         OrderEventConsumerProperties.class,
         PaymentEventConsumerProperties.class,
         UnackedEventPullProperties.class,
+        PerformanceMonitoringProperties.class,
         FuiouOrderProperties.class,
         FuiouPaymentProperties.class
 })
@@ -37,11 +39,14 @@ public class EventConsumerConfiguration {
 
     public static final String ORDER_STREAM_EXECUTOR = "orderStreamListenerExecutor";
     public static final String PAYMENT_STREAM_EXECUTOR = "paymentStreamListenerExecutor";
+    public static final String ORDER_EVENT_WORKER_EXECUTOR = "orderEventWorkerExecutor";
+    public static final String PAYMENT_EVENT_WORKER_EXECUTOR = "paymentEventWorkerExecutor";
     public static final String STREAM_WATCHDOG_SCHEDULER = "streamWatchdogTaskScheduler";
     public static final String ORDER_PEL_SCHEDULER = "orderPelTaskScheduler";
     public static final String PAYMENT_PEL_SCHEDULER = "paymentPelTaskScheduler";
     public static final String UNACKED_PULL_SCHEDULER = "unackedPullTaskScheduler";
     public static final String UNACKED_PULL_WORKER_EXECUTOR = "unackedPullWorkerExecutor";
+    public static final String PERFORMANCE_MONITOR_SCHEDULER = "performanceMonitorTaskScheduler";
 
     @Bean(name = ORDER_STREAM_EXECUTOR)
     @ConditionalOnProperty(prefix = "trade.pipeline.order-event-consumer",
@@ -55,6 +60,26 @@ public class EventConsumerConfiguration {
             name = "enabled", havingValue = "true", matchIfMissing = true)
     public ThreadPoolTaskExecutor paymentStreamListenerExecutor() {
         return streamExecutor("pipeline-payment-stream-");
+    }
+
+    @Bean(name = ORDER_EVENT_WORKER_EXECUTOR, destroyMethod = "shutdown")
+    @ConditionalOnProperty(prefix = "trade.pipeline.order-event-consumer",
+            name = "enabled", havingValue = "true", matchIfMissing = true)
+    public PartitionedEventExecutor orderEventWorkerExecutor(OrderEventConsumerProperties properties) {
+        return new PartitionedEventExecutor(
+                properties.getWorkerCount(),
+                properties.getWorkerQueueCapacity(),
+                "pipeline-order-worker-");
+    }
+
+    @Bean(name = PAYMENT_EVENT_WORKER_EXECUTOR, destroyMethod = "shutdown")
+    @ConditionalOnProperty(prefix = "trade.pipeline.payment-event-consumer",
+            name = "enabled", havingValue = "true", matchIfMissing = true)
+    public PartitionedEventExecutor paymentEventWorkerExecutor(PaymentEventConsumerProperties properties) {
+        return new PartitionedEventExecutor(
+                properties.getWorkerCount(),
+                properties.getWorkerQueueCapacity(),
+                "pipeline-payment-worker-");
     }
 
     @Bean(initMethod = "start", destroyMethod = "stop")
@@ -125,6 +150,11 @@ public class EventConsumerConfiguration {
     @Bean(name = UNACKED_PULL_SCHEDULER)
     public ThreadPoolTaskScheduler unackedPullTaskScheduler() {
         return scheduler(2, "pipeline-unacked-pull-");
+    }
+
+    @Bean(name = PERFORMANCE_MONITOR_SCHEDULER)
+    public ThreadPoolTaskScheduler performanceMonitorTaskScheduler() {
+        return scheduler(1, "pipeline-performance-monitor-");
     }
 
     @Bean(name = UNACKED_PULL_WORKER_EXECUTOR)

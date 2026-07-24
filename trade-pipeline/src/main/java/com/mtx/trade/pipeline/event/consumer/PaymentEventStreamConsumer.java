@@ -1,10 +1,15 @@
-package com.mtx.trade.pipeline.service;
+package com.mtx.trade.pipeline.event.consumer;
 
-import com.mtx.trade.pipeline.config.OrderEventConsumerProperties;
-import com.mtx.trade.pipeline.dto.OrderEventMessage;
+import com.mtx.trade.pipeline.config.PaymentEventConsumerProperties;
+import com.mtx.trade.pipeline.dto.PaymentEventMessage;
+import com.mtx.trade.pipeline.enums.PaymentEventProcessStage;
+import com.mtx.trade.pipeline.enums.PaymentPersistResult;
+import com.mtx.trade.pipeline.event.processor.PaymentEventHandler;
+import com.mtx.trade.pipeline.exception.PaymentEventProcessingException;
+import com.mtx.trade.pipeline.service.*;
 import jakarta.annotation.PostConstruct;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.domain.Range;
 import org.springframework.data.redis.connection.stream.MapRecord;
@@ -15,31 +20,51 @@ import org.springframework.data.redis.connection.stream.RecordId;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.time.LocalDateTime;
+import java.util.concurrent.CompletableFuture;
 
-/** 订单事件消费、跨实例 PEL 接管以及 Redis ACK 编排。 */
+import static com.mtx.trade.pipeline.config.EventConsumerConfiguration.PAYMENT_EVENT_WORKER_EXECUTOR;
+
+/** 支付事件消费、PEL 接管、处理审计及双重 ACK 编排。 */
 @Slf4j
 @Service
-@RequiredArgsConstructor
-@ConditionalOnProperty(
-        prefix = "trade.pipeline.order-event-consumer",
-        name = "enabled",
-        havingValue = "true",
-        matchIfMissing = true)
-public class OrderEventStreamConsumer {
+@ConditionalOnProperty(prefix = "trade.pipeline.payment-event-consumer",
+        name = "enabled", havingValue = "true", matchIfMissing = true)
+public class PaymentEventStreamConsumer {
 
     private final StringRedisTemplate redisTemplate;
-    private final OrderEventConsumerProperties properties;
-    private final OrderEventHandler orderEventHandler;
+    private final PaymentEventConsumerProperties properties;
+    private final PaymentEventHandler paymentEventHandler;
     private final IngressEventAckClient ingressEventAckClient;
-    private final OrderEventProcessLogService processLogService;
+    private final PaymentEventProcessLogService processLogService;
     private final PelOrphanCleaner pelOrphanCleaner;
+    private final PartitionedEventExecutor workerExecutor;
+    private final EventProcessingTelemetry telemetry;
 
     private volatile boolean groupReady;
+
+    public PaymentEventStreamConsumer(
+            StringRedisTemplate redisTemplate,
+            PaymentEventConsumerProperties properties,
+            PaymentEventHandler paymentEventHandler,
+            IngressEventAckClient ingressEventAckClient,
+            PaymentEventProcessLogService processLogService,
+            PelOrphanCleaner pelOrphanCleaner,
+            @Qualifier(PAYMENT_EVENT_WORKER_EXECUTOR) PartitionedEventExecutor workerExecutor,
+            EventProcessingTelemetry telemetry) {
+        this.redisTemplate = redisTemplate;
+        this.properties = properties;
+        this.paymentEventHandler = paymentEventHandler;
+        this.ingressEventAckClient = ingressEventAckClient;
+        this.processLogService = processLogService;
+        this.pelOrphanCleaner = pelOrphanCleaner;
+        this.workerExecutor = workerExecutor;
+        this.telemetry = telemetry;
+    }
 
     public boolean isReady() {
         return groupReady;
@@ -50,21 +75,21 @@ public class OrderEventStreamConsumer {
         ensureConsumerGroup();
     }
 
-    /** 由订单专属 StreamMessageListenerContainer 回调，不占用定时任务线程。 */
+    /** 由支付专属 StreamMessageListenerContainer 回调，不占用定时任务线程。 */
     public void consumeNewMessage(MapRecord<String, String, String> record) {
-        processOne(record, false);
+        dispatch(record, false);
     }
 
     public void handleStreamReadError(Throwable error) {
         if (isNoGroup(error)) {
             groupReady = false;
-            log.warn("[Stream Consumer] 🔄 Order consumer group is missing; recreation is being attempted. "
+            log.warn("[Stream Consumer] 🔄 Payment consumer group is missing; recreation is being attempted. "
                             + "stream={}, group={}",
                     properties.getStreamKey(), properties.getGroup());
             ensureConsumerGroup();
             return;
         }
-        log.error("[Stream Consumer] ❌ Order Stream listener failed; the subscription remains active. stream={}",
+        log.error("[Stream Consumer] ❌ Payment Stream listener failed; the subscription remains active. stream={}",
                 properties.getStreamKey(), error);
     }
 
@@ -75,10 +100,7 @@ public class OrderEventStreamConsumer {
         }
         try {
             PendingMessages pendingMessages = redisTemplate.opsForStream().pending(
-                    properties.getStreamKey(),
-                    properties.getGroup(),
-                    Range.unbounded(),
-                    properties.getBatchSize());
+                    properties.getStreamKey(), properties.getGroup(), Range.unbounded(), properties.getBatchSize());
             if (pendingMessages.isEmpty()) {
                 return;
             }
@@ -92,34 +114,53 @@ public class OrderEventStreamConsumer {
                 return;
             }
             List<MapRecord<String, Object, Object>> claimed = redisTemplate.opsForStream().claim(
-                    properties.getStreamKey(),
-                    properties.getGroup(),
-                    properties.getConsumerName(),
-                    properties.getPendingMinIdle(),
-                    claimIds.toArray(RecordId[]::new));
+                    properties.getStreamKey(), properties.getGroup(), properties.getConsumerName(),
+                    properties.getPendingMinIdle(), claimIds.toArray(RecordId[]::new));
             List<MapRecord<String, Object, Object>> claimedRecords =
                     claimed == null ? Collections.emptyList() : claimed;
-            log.info("[PEL Recovery] 🔄 Reclaiming order pending messages. requested={}, reclaimed={}, group={}",
+            log.info("[PEL Recovery] 🔄 Reclaiming payment pending messages. requested={}, reclaimed={}, group={}",
                     claimIds.size(), claimedRecords.size(), properties.getGroup());
             process(claimedRecords, true);
             pelOrphanCleaner.clean(
                     properties.getStreamKey(), properties.getGroup(), claimIds, claimedRecords);
-            log.info("[PEL Recovery] ✅ Order reclaim batch completed. requested={}, reclaimed={}, group={}",
+            log.info("[PEL Recovery] ✅ Payment reclaim batch completed. requested={}, reclaimed={}, group={}",
                     claimIds.size(), claimedRecords.size(), properties.getGroup());
         } catch (Exception e) {
             if (isNoGroup(e)) {
                 groupReady = false;
             }
-            log.error("[PEL Recovery] ❌ Order pending-message reclaim failed; entries remain recoverable. "
+            log.error("[PEL Recovery] ❌ Payment pending-message reclaim failed; entries remain recoverable. "
                             + "stream={}, group={}",
                     properties.getStreamKey(), properties.getGroup(), e);
         }
     }
 
     private void process(List<? extends MapRecord<String, ?, ?>> records, boolean reclaimed) {
-        for (MapRecord<String, ?, ?> record : records) {
-            processOne(record, reclaimed);
+        CompletableFuture<?>[] completions = records.stream()
+                .map(record -> dispatch(record, reclaimed))
+                .toArray(CompletableFuture[]::new);
+        CompletableFuture.allOf(completions).join();
+    }
+
+    private CompletableFuture<Void> dispatch(MapRecord<String, ?, ?> record, boolean reclaimed) {
+        return workerExecutor.submit(partitionKey(record), () -> processOne(record, reclaimed))
+                .whenComplete((ignored, failure) -> {
+                    if (failure != null) {
+                        telemetry.markFailure(EventProcessingTelemetry.PAYMENT);
+                        log.error("[Stream Consumer] ❌ Payment worker terminated unexpectedly; the record remains "
+                                        + "recoverable in PEL. recordId={}",
+                                record.getId().getValue(), failure);
+                    }
+                });
+    }
+
+    private static String partitionKey(MapRecord<String, ?, ?> record) {
+        Object sourceSystem = record.getValue().get("sourceSystem");
+        Object eventKey = record.getValue().get("eventKey");
+        if (sourceSystem != null && eventKey != null && !eventKey.toString().isBlank()) {
+            return sourceSystem + ":" + eventKey;
         }
+        return "invalid:" + record.getId().getValue();
     }
 
     private void processOne(MapRecord<String, ?, ?> record, boolean reclaimed) {
@@ -127,25 +168,25 @@ public class OrderEventStreamConsumer {
         long startedNanos = System.nanoTime();
         String recordId = record.getId().getValue();
         int triggerType = reclaimed
-                ? OrderEventProcessLogService.TRIGGER_PEL_RECLAIM
-                : OrderEventProcessLogService.TRIGGER_STREAM;
-        OrderEventMessage event;
+                ? PaymentEventProcessLogService.TRIGGER_PEL_RECLAIM
+                : PaymentEventProcessLogService.TRIGGER_STREAM;
+        PaymentEventMessage event;
         try {
-            event = OrderEventMessage.from(record.getValue());
+            event = PaymentEventMessage.from(record.getValue());
         } catch (Exception e) {
             recordFailureAndAcknowledge(null, record, triggerType,
-                    OrderEventProcessStage.STREAM_MESSAGE, e, startedTime, startedNanos, reclaimed);
+                    PaymentEventProcessStage.STREAM_MESSAGE, e, startedTime, startedNanos, reclaimed);
             return;
         }
 
-        OrderPersistResult result;
+        PaymentPersistResult result;
         try {
-            result = orderEventHandler.handle(event);
+            result = paymentEventHandler.handle(event);
         } catch (Exception e) {
-            String stage = e instanceof OrderEventProcessingException processingException
-                    ? processingException.getStage() : OrderEventProcessStage.ORDER_PERSIST;
-            recordFailureAndAcknowledge(event, record, triggerType,
-                    stage, e, startedTime, startedNanos, reclaimed);
+            String stage = e instanceof PaymentEventProcessingException processingException
+                    ? processingException.getStage() : PaymentEventProcessStage.PAYMENT_PERSIST;
+            recordFailureAndAcknowledge(
+                    event, record, triggerType, stage, e, startedTime, startedNanos, reclaimed);
             return;
         }
 
@@ -154,20 +195,21 @@ public class OrderEventStreamConsumer {
             processLogId = processLogService.recordSuccess(
                     event, recordId, triggerType, result, startedTime, startedNanos);
         } catch (Exception e) {
-            log.error("[Processing Audit] ❌ Successful order processing could not be recorded; message remains "
+            log.error("[Processing Audit] ❌ Successful payment processing could not be recorded; message remains "
                             + "in PEL. "
                             + "recordId={}, eventId={}, storageId={}, eventKey={}",
                     recordId, event.eventId(), event.storageId(), event.eventKey(), e);
             return;
         }
-
+        telemetry.markSuccess(EventProcessingTelemetry.PAYMENT);
         boolean ingressAcked = false;
         try {
             ingressEventAckClient.ack(event.contentType(), event.eventId());
             ingressAcked = true;
         } catch (Exception e) {
+            telemetry.markIngressAckFailure(EventProcessingTelemetry.PAYMENT);
             recordIngressAckFailure(processLogId, e);
-            log.warn("[Ingress ACK] 🔄 Order was persisted but Ingress ACK failed; Redis will be XACKed and "
+            log.warn("[Ingress ACK] 🔄 Payment was persisted but Ingress ACK failed; Redis will be XACKed and "
                             + "the unacknowledged event will be recovered by the scheduled pull. "
                             + "recordId={}, eventId={}, storageId={}, eventKey={}",
                     recordId, event.eventId(), event.storageId(), event.eventKey(), e);
@@ -176,19 +218,19 @@ public class OrderEventStreamConsumer {
             try {
                 processLogService.recordIngressAck(processLogId, true);
             } catch (Exception e) {
-                log.error("[Processing Audit] ❌ Successful order Ingress ACK status could not be recorded; "
+                log.error("[Processing Audit] ❌ Successful payment Ingress ACK status could not be recorded; "
                                 + "the durable success audit remains authoritative. processLogId={}, recordId={}, eventId={}",
                         processLogId, recordId, event.eventId(), e);
             }
         }
         acknowledge(record, processLogId);
-        log.debug("[Stream Consumer] ✅ Order event completed. recordId={}, eventId={}, storageId={}, "
+        log.debug("[Stream Consumer] ✅ Payment event completed. recordId={}, eventId={}, storageId={}, "
                         + "eventKey={}, result={}, reclaimed={}",
                 recordId, event.eventId(), event.storageId(), event.eventKey(), result, reclaimed);
     }
 
     private void recordFailureAndAcknowledge(
-            OrderEventMessage event,
+            PaymentEventMessage event,
             MapRecord<String, ?, ?> record,
             int triggerType,
             String stage,
@@ -196,19 +238,20 @@ public class OrderEventStreamConsumer {
             LocalDateTime startedTime,
             long startedNanos,
             boolean reclaimed) {
+        telemetry.markFailure(EventProcessingTelemetry.PAYMENT);
         String recordId = record.getId().getValue();
         long processLogId;
         try {
             processLogId = processLogService.recordFailure(
                     event, recordId, triggerType, stage, failure, startedTime, startedNanos);
         } catch (Exception logFailure) {
-            log.error("[Processing Audit] ❌ Order failure could not be recorded; message remains in PEL. "
+            log.error("[Processing Audit] ❌ Payment failure could not be recorded; message remains in PEL. "
                             + "recordId={}, eventId={}",
                     recordId, event == null ? null : event.eventId(), logFailure);
             return;
         }
         acknowledge(record, processLogId);
-        log.error("[Stream Consumer] ❌ Order processing failed; Redis delivery was acknowledged and Ingress "
+        log.error("[Stream Consumer] ❌ Payment processing failed; Redis delivery was acknowledged and Ingress "
                         + "remains unacknowledged for recovery. "
                         + "recordId={}, eventId={}, stage={}, reclaimed={}",
                 recordId, event == null ? null : event.eventId(), stage, reclaimed, failure);
@@ -221,17 +264,20 @@ public class OrderEventStreamConsumer {
                     properties.getStreamKey(), properties.getGroup(), record.getId());
             succeeded = acknowledged != null && acknowledged > 0;
             if (!succeeded) {
-                log.warn("[Redis XACK] 🔄 Order XACK affected no pending record; the record will not be deleted. "
+                log.warn("[Redis XACK] 🔄 Payment XACK affected no pending record; the record will not be deleted. "
                         + "recordId={}", record.getId().getValue());
             }
         } catch (Exception e) {
-            log.error("[Redis XACK] ❌ Order XACK failed; record remains recoverable in PEL. recordId={}",
+            log.error("[Redis XACK] ❌ Payment XACK failed; record remains recoverable in PEL. recordId={}",
                     record.getId().getValue(), e);
         } finally {
+            if (!succeeded) {
+                telemetry.markRedisXackFailure(EventProcessingTelemetry.PAYMENT);
+            }
             try {
                 processLogService.recordRedisXack(processLogId, succeeded);
             } catch (Exception e) {
-                log.error("[Processing Audit] ❌ Order XACK status could not be recorded. "
+                log.error("[Processing Audit] ❌ Payment XACK status could not be recorded. "
                                 + "processLogId={}, recordId={}",
                         processLogId, record.getId().getValue(), e);
             }
@@ -245,7 +291,7 @@ public class OrderEventStreamConsumer {
         try {
             redisTemplate.opsForStream().delete(properties.getStreamKey(), record.getId());
         } catch (Exception e) {
-            log.warn("[Redis Stream] 🔄 Acknowledged order record could not be deleted; MAXLEN remains the "
+            log.warn("[Redis Stream] 🔄 Acknowledged payment record could not be deleted; MAXLEN remains the "
                             + "cleanup fallback. recordId={}",
                     record.getId().getValue(), e);
         }
@@ -265,15 +311,13 @@ public class OrderEventStreamConsumer {
         }
         RecordId initRecordId = null;
         try {
-            Boolean exists = redisTemplate.hasKey(properties.getStreamKey());
-            if (!Boolean.TRUE.equals(exists)) {
-                initRecordId = redisTemplate.opsForStream().add(
-                        properties.getStreamKey(), Map.of("init", "true"));
+            if (!Boolean.TRUE.equals(redisTemplate.hasKey(properties.getStreamKey()))) {
+                initRecordId = redisTemplate.opsForStream().add(properties.getStreamKey(), Map.of("init", "true"));
             }
             try {
                 redisTemplate.opsForStream().createGroup(
                         properties.getStreamKey(), ReadOffset.from("0-0"), properties.getGroup());
-                log.info("[Stream Consumer] ✅ Order consumer group is ready. stream={}, group={}",
+                log.info("[Stream Consumer] ✅ Payment consumer group is ready. stream={}, group={}",
                         properties.getStreamKey(), properties.getGroup());
             } catch (Exception e) {
                 if (!isBusyGroup(e)) {
@@ -283,7 +327,7 @@ public class OrderEventStreamConsumer {
             groupReady = true;
             return true;
         } catch (Exception e) {
-            log.error("[Stream Consumer] ❌ Order consumer group initialization failed; consumption is paused. "
+            log.error("[Stream Consumer] ❌ Payment consumer group initialization failed; consumption is paused. "
                             + "stream={}, group={}",
                     properties.getStreamKey(), properties.getGroup(), e);
             return false;
@@ -292,7 +336,7 @@ public class OrderEventStreamConsumer {
                 try {
                     redisTemplate.opsForStream().delete(properties.getStreamKey(), initRecordId);
                 } catch (Exception e) {
-                    log.warn("[Redis Stream] 🔄 Order initialization record cleanup failed; MAXLEN remains the "
+                    log.warn("[Redis Stream] 🔄 Payment initialization record cleanup failed; MAXLEN remains the "
                             + "fallback. recordId={}", initRecordId, e);
                 }
             }

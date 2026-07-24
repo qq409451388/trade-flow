@@ -7,7 +7,7 @@ import com.mtx.trade.common.exception.BusinessException;
 import com.mtx.trade.pipeline.dto.OrderEventMessage;
 import com.mtx.trade.pipeline.entity.OrderEventProcessLogDO;
 import com.mtx.trade.pipeline.service.OrderEventProcessLogService;
-import com.mtx.trade.pipeline.service.OrderPersistResult;
+import com.mtx.trade.pipeline.enums.OrderPersistResult;
 import com.mtx.trade.pipeline.service.db.OrderEventProcessLogDbService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;

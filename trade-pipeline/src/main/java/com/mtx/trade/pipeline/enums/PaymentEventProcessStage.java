@@ -1,4 +1,4 @@
-package com.mtx.trade.pipeline.service;
+package com.mtx.trade.pipeline.enums;
 
 /** 支付事件处理失败阶段。 */
 public final class PaymentEventProcessStage {

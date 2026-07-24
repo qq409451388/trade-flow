@@ -13,27 +13,75 @@ if [[ "${1:-}" == "__send-one" ]]; then
 
     result_name="$(basename "$payload_file")"
     active_file="${REPLAY_ACTIVE_DIR}/${result_name}.json"
+    curl_error_file="${REPLAY_RESULT_DIR}/curl-error.${result_name}"
     ln -s "$payload_file" "$active_file"
 
-    response="$(curl -sS -w '\n%{http_code}' \
-        --connect-timeout 3 --max-time 30 \
-        -X POST "$REPLAY_WORKER_TARGET" \
-        -H 'Content-Type: application/json' \
-        --data-binary @"$payload_file" 2>/dev/null || true)"
-    http_code="${response##*$'\n'}"
-    response_body="${response%$'\n'*}"
+    transport_retries=0
+    : > "$curl_error_file"
+    while true; do
+        set +e
+        response="$(curl -sS -w '\n%{http_code}' \
+            --noproxy 'localhost,127.0.0.1,::1' \
+            --connect-timeout 3 --max-time 30 \
+            -X POST "$REPLAY_WORKER_TARGET" \
+            -H 'Content-Type: application/json' \
+            --data-binary @"$payload_file" 2>>"$curl_error_file")"
+        curl_exit_code=$?
+        set -e
+        http_code="${response##*$'\n'}"
+        response_body="${response%$'\n'*}"
+
+        retryable=0
+        if (( curl_exit_code != 0 )) || [[ "$http_code" =~ ^5[0-9][0-9]$ ]]; then
+            retryable=1
+        fi
+        if (( retryable == 1 \
+                && transport_retries < ${REPLAY_WORKER_TRANSPORT_RETRIES:-2} )); then
+            transport_retries=$((transport_retries + 1))
+            sleep 1
+            continue
+        fi
+        break
+    done
+    payload_sha256="$(shasum -a 256 "$payload_file" | awk '{print $1}')"
+    curl_error="$(tr '\r\n' '  ' < "$curl_error_file")"
     rm -f "$active_file"
 
-    if [[ "$http_code" == "200" ]] \
+    if (( curl_exit_code == 0 )) \
+            && [[ "$http_code" == "200" ]] \
             && [[ "$response_body" =~ \"resultCode\"[[:space:]]*:[[:space:]]*\"000000\" ]]; then
         result_file="${REPLAY_RESULT_DIR}/success.${result_name}"
+        if (( transport_retries == 0 )); then
+            rm -f "$curl_error_file"
+        fi
     else
         result_file="${REPLAY_RESULT_DIR}/fail.${result_name}"
     fi
-    printf 'http_code=%s\nresponse=%s\npayload_file=%s\n' \
-        "$http_code" "$response_body" "$payload_file" > "$result_file"
+    printf 'payload_sha256=%s\ncurl_exit_code=%s\ntransport_retries=%s\nconfigured_transport_retries=%s\nhttp_code=%s\nresponse=%s\ncurl_error=%s\npayload_file=%s\n' \
+        "$payload_sha256" "$curl_exit_code" "$transport_retries" \
+        "${REPLAY_WORKER_TRANSPORT_RETRIES:-2}" "$http_code" "$response_body" \
+        "$curl_error" "$payload_file" > "$result_file"
 
-    sleep "${REPLAY_WORKER_DELAY:-0}"
+    if (( curl_exit_code == 0 && transport_retries > 0 )) \
+            && [[ "$http_code" == "200" ]] \
+            && [[ "$response_body" =~ \"resultCode\"[[:space:]]*:[[:space:]]*\"000000\" ]]; then
+        printf '[回放重试成功] payloadSha256=%s transportRetries=%s http=%s detail=%s\n' \
+            "$payload_sha256" "$transport_retries" "$http_code" \
+            "$result_file" >&2
+    elif (( curl_exit_code != 0 )) \
+            || [[ "$http_code" != "200" ]] \
+            || [[ ! "$response_body" =~ \"resultCode\"[[:space:]]*:[[:space:]]*\"000000\" ]]; then
+        response_one_line="$(printf '%s' "$response_body" | tr '\r\n' '  ')"
+        printf '[回放失败] payloadSha256=%s curlExit=%s configuredRetries=%s http=%s response=%s curlError=%s detail=%s\n' \
+            "$payload_sha256" "$curl_exit_code" "${REPLAY_WORKER_TRANSPORT_RETRIES:-2}" \
+            "$http_code" "$response_one_line" \
+            "$curl_error" "$result_file" >&2
+    fi
+
+    # 兼容脚本热更新时仍在运行的旧主进程；新主进程由全局 pacer 控速。
+    if [[ "${REPLAY_GLOBAL_PACER_ENABLED:-no}" != "yes" ]]; then
+        sleep "${REPLAY_WORKER_DELAY:-0}"
+    fi
     exit 0
 fi
 
@@ -51,7 +99,8 @@ usage() {
 
 可选环境变量:
   REPLAY_SSH_TARGET      SSH 目标，默认 ubuntu@81.70.59.128
-  REPLAY_RPS             全局近似限速，默认 20 条/秒，最大 100
+  REPLAY_RPS             全局请求发射上限，默认 20 条/秒，最大 100
+  REPLAY_TRANSPORT_RETRIES  超时/断连/5xx额外重试次数，默认2，最大5
   REPLAY_ALLOW_REMOTE_TARGET=yes  允许回放到非本机地址
 EOF
     exit 1
@@ -92,13 +141,16 @@ TIME_PATTERN='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$'
 RPS="${REPLAY_RPS:-20}"
 [[ "$RPS" =~ ^[0-9]+$ ]] && (( RPS >= 1 && RPS <= 100 )) \
     || fail "REPLAY_RPS 必须为 1~100"
+TRANSPORT_RETRIES="${REPLAY_TRANSPORT_RETRIES:-2}"
+[[ "$TRANSPORT_RETRIES" =~ ^[0-9]+$ ]] && (( TRANSPORT_RETRIES <= 5 )) \
+    || fail "REPLAY_TRANSPORT_RETRIES 必须为 0~5"
 [[ "$BASE_URL" =~ ^https?:// ]] || fail "base_url 必须以 http:// 或 https:// 开头"
 if [[ ! "$BASE_URL" =~ ^https?://(localhost|127\.0\.0\.1|\[::1\])([:/]|$) ]] \
         && [[ "${REPLAY_ALLOW_REMOTE_TARGET:-no}" != "yes" ]]; then
     fail "默认只允许回放到本机；远端目标需显式设置 REPLAY_ALLOW_REMOTE_TARGET=yes"
 fi
 
-for command_name in ssh curl xargs awk find; do
+for command_name in ssh curl xargs awk find shasum perl; do
     command -v "$command_name" >/dev/null 2>&1 || fail "缺少命令: $command_name"
 done
 
@@ -134,16 +186,15 @@ trap 'KEEP_WORK_DIR=1; exit 130' INT TERM
 
 mkdir -p "$PAYLOAD_DIR" "$RESULT_DIR" "$ACTIVE_DIR"
 
-# 每个 worker 的间隔 = 并发数 / 全局 RPS，合计近似限制到 REPLAY_RPS。
-WORKER_DELAY="$(awk -v parallel="$PARALLEL" -v rps="$RPS" \
-    'BEGIN { printf "%.3f", parallel / rps }')"
 export REPLAY_WORKER_TARGET="$TARGET"
-export REPLAY_WORKER_DELAY="$WORKER_DELAY"
 export REPLAY_RESULT_DIR="$RESULT_DIR"
 export REPLAY_ACTIVE_DIR="$ACTIVE_DIR"
+export REPLAY_PACER_RPS="$RPS"
+export REPLAY_GLOBAL_PACER_ENABLED=yes
+export REPLAY_WORKER_TRANSPORT_RETRIES="$TRANSPORT_RETRIES"
 
 echo "流式读取并回放: ${TYPE}, [${START_SQL}, ${END_SQL})"
-echo "目标: ${TARGET}；并发: ${PARALLEL}；限速: 约 ${RPS} 条/秒"
+echo "目标: ${TARGET}；并发: ${PARALLEL}；全局发射上限: ${RPS} 条/秒"
 echo "运行明细: ${WORK_DIR}"
 
 START_TS="$(date +%s)"
@@ -173,6 +224,18 @@ ssh -o ServerAliveInterval=30 "$SSH_TARGET" \
     printf '%s' "$body" > "$payload_file"
     printf '%s\0' "$payload_file"
 done \
+| perl -0 -MTime::HiRes=time,sleep -ne '
+    BEGIN {
+        $interval = 1 / $ENV{"REPLAY_PACER_RPS"};
+        $next_send_at = time;
+    }
+    $now = time;
+    sleep($next_send_at - $now) if $next_send_at > $now;
+    print;
+    $next_send_at += $interval;
+    $after_send = time;
+    $next_send_at = $after_send if $next_send_at < $after_send - $interval;
+' \
 | xargs -0 -n 1 -P "$PARALLEL" "$SCRIPT_PATH" __send-one \
 || PIPELINE_STATUS=$?
 
@@ -199,5 +262,6 @@ fi
 echo "完成：读取 ${TOTAL}，成功 ${TOTAL_SUCCESS}，失败 ${TOTAL_FAIL}，耗时 ${ELAPSED}s，平均 $((TOTAL / ELAPSED)) 条/秒"
 if (( TOTAL_FAIL > 0 )); then
     KEEP_WORK_DIR=1
+    echo "失败明细目录: ${RESULT_DIR}/fail.*" >&2
     exit 2
 fi

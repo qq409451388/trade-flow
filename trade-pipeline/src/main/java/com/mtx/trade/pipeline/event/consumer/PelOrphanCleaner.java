@@ -1,4 +1,4 @@
-package com.mtx.trade.pipeline.service;
+package com.mtx.trade.pipeline.event.consumer;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -17,7 +17,7 @@ import java.util.Set;
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class PelOrphanCleaner {
+class PelOrphanCleaner {
 
     private final StringRedisTemplate redisTemplate;
 

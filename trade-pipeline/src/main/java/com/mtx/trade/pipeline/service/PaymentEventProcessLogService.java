@@ -1,6 +1,7 @@
 package com.mtx.trade.pipeline.service;
 
 import com.mtx.trade.pipeline.dto.PaymentEventMessage;
+import com.mtx.trade.pipeline.enums.PaymentPersistResult;
 
 import java.time.LocalDateTime;
 import java.util.List;

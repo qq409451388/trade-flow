@@ -5,6 +5,7 @@ import com.mtx.trade.common.enums.ContentType;
 import com.mtx.trade.common.exception.BusinessException;
 import com.mtx.trade.pipeline.config.FuiouOrderProperties;
 import com.mtx.trade.pipeline.dto.OrderEventMessage;
+import com.mtx.trade.pipeline.event.processor.FuiouOrderParser;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;

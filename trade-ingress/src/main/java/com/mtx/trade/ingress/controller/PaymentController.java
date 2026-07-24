@@ -7,6 +7,7 @@ import com.mtx.trade.ingress.common.enums.EventAckStatus;
 import com.mtx.trade.ingress.common.enums.SourceSystem;
 import com.mtx.trade.ingress.dto.EventIngestResult;
 import com.mtx.trade.ingress.dto.FuiouResponse;
+import com.mtx.trade.ingress.dto.IngestRequestTrace;
 import com.mtx.trade.ingress.dto.ParsedEventVersion;
 import com.mtx.trade.ingress.entity.OrderEventDO;
 import com.mtx.trade.ingress.entity.PaymentEventDO;
@@ -37,38 +38,103 @@ public class PaymentController {
     private FuiouPaymentPayloadParser fuiouPaymentPayloadParser;
     @Resource
     private EventIngestFailureLogService eventIngestFailureLogService;
+    @Resource
+    private IngressRequestMonitor ingressRequestMonitor;
     @Value("${trade.thirdparty.fuiou.secret}")
     private String secret;
 
     @PostMapping("/store-push")
     public FuiouResponse storePush(@RequestBody String payload) {
+        long requestStartedNanos = System.nanoTime();
+        long signatureNanos = 0;
+        long storageNanos = 0;
+        long eventParseNanos = 0;
+        long eventPersistNanos = 0;
+        IngestRequestTrace trace = IngestRequestTrace.fromPayload(payload);
         PaymentEventDO eventDO = null;
         StorageRef storageRef = null;
         ParsedEventVersion parsedEvent = null;
-        String failureStage = EventIngestFailureLogService.STAGE_EVENT_FIELD_PARSE;
+        String failureStage = EventIngestFailureLogService.STAGE_SIGNATURE_VERIFY;
         try {
-            FuiouSignUtils.FuiouSignParts fuiouSignParts = FuiouSignUtils.parseSign(payload);
-            boolean verifyResult = FuiouSignUtils.verifySign(fuiouSignParts, secret);
-            if (!verifyResult) {
-                return FuiouResponse.fail("verify sign failed.");
+            long stageStartedNanos = System.nanoTime();
+            FuiouSignUtils.FuiouSignParts fuiouSignParts;
+            boolean verifyResult;
+            try {
+                fuiouSignParts = FuiouSignUtils.parseSign(payload);
+                verifyResult = FuiouSignUtils.verifySign(fuiouSignParts, secret);
+            } finally {
+                signatureNanos = System.nanoTime() - stageStartedNanos;
             }
-            storageRef = this.writeStorage(payload);
-            parsedEvent = fuiouPaymentPayloadParser.parse(payload);
+            if (!verifyResult) {
+                BusinessException failure = new BusinessException(
+                        ErrorCode.FORBIDDEN, "verify sign failed.");
+                Long auditId = this.recordEventFailure(
+                        trace, storageRef, failureStage, parsedEvent, failure);
+                log.warn("[Ingress] Payment push rejected. requestId={}, payloadSha256={}, "
+                                + "stage={}, auditId={}, reason={}",
+                        trace.requestId(), trace.payloadSha256Hex(), failureStage,
+                        auditId, failure.getMessage());
+                return failureResponse(failure.getMessage(), trace.requestId());
+            }
+            failureStage = EventIngestFailureLogService.STAGE_STORAGE_PERSIST;
+            stageStartedNanos = System.nanoTime();
+            try {
+                storageRef = this.writeStorage(payload);
+            } finally {
+                storageNanos = System.nanoTime() - stageStartedNanos;
+            }
+            failureStage = EventIngestFailureLogService.STAGE_EVENT_FIELD_PARSE;
+            stageStartedNanos = System.nanoTime();
+            try {
+                parsedEvent = fuiouPaymentPayloadParser.parse(payload);
+            } finally {
+                eventParseNanos = System.nanoTime() - stageStartedNanos;
+            }
             failureStage = EventIngestFailureLogService.STAGE_EVENT_PERSIST;
-            eventDO = this.createEvent(parsedEvent, storageRef);
+            stageStartedNanos = System.nanoTime();
+            try {
+                eventDO = this.createEvent(parsedEvent, storageRef);
+            } finally {
+                eventPersistNanos = System.nanoTime() - stageStartedNanos;
+            }
             return FuiouResponse.ok();
         } catch (StorageWriteException e) {
-            log.error("[Storage] ❌ Payment payload persistence failed; the request was rejected.", e);
-            return FuiouResponse.fail(ErrorCode.DATA_CREATE_ERROR.getMessage());
+            Long auditId = this.recordEventFailure(
+                    trace, storageRef, failureStage, parsedEvent, e);
+            log.error("[Storage] ❌ Payment payload persistence failed; the request was rejected. "
+                            + "requestId={}, payloadSha256={}, stage={}, auditId={}",
+                    trace.requestId(), trace.payloadSha256Hex(), failureStage, auditId, e);
+            return failureResponse(ErrorCode.DATA_CREATE_ERROR.getMessage(), trace.requestId());
         } catch (BusinessException e) {
-            this.recordEventFailure(storageRef, failureStage, parsedEvent, e);
-            return FuiouResponse.fail(e.getMessage());
+            Long auditId = this.recordEventFailure(
+                    trace, storageRef, failureStage, parsedEvent, e);
+            log.warn("[Ingress] Payment push business validation failed. requestId={}, "
+                            + "payloadSha256={}, stage={}, auditId={}, reason={}",
+                    trace.requestId(), trace.payloadSha256Hex(), failureStage,
+                    auditId, e.getMessage());
+            return failureResponse(e.getMessage(), trace.requestId());
         } catch (Exception e) {
-            this.recordEventFailure(storageRef, failureStage, parsedEvent, e);
-            log.error("[Ingress] ❌ Payment push processing failed. reason={}", e.getMessage(), e);
-            return FuiouResponse.fail(ErrorCode.SYSTEM_ERROR.getMessage());
+            Long auditId = this.recordEventFailure(
+                    trace, storageRef, failureStage, parsedEvent, e);
+            log.error("[Ingress] ❌ Payment push processing failed. requestId={}, "
+                            + "payloadSha256={}, stage={}, auditId={}, reason={}",
+                    trace.requestId(), trace.payloadSha256Hex(), failureStage,
+                    auditId, e.getMessage(), e);
+            return failureResponse(ErrorCode.SYSTEM_ERROR.getMessage(), trace.requestId());
         } finally {
+            long publishStartedNanos = System.nanoTime();
             this.publishPaymentEvent(eventDO);
+            long publishNanos = System.nanoTime() - publishStartedNanos;
+            ingressRequestMonitor.logIfSlow(
+                    "payment",
+                    trace,
+                    failureStage,
+                    System.nanoTime() - requestStartedNanos,
+                    signatureNanos,
+                    storageNanos,
+                    eventParseNanos,
+                    eventPersistNanos,
+                    publishNanos);
         }
     }
 
@@ -95,22 +161,29 @@ public class PaymentController {
         return eventDO;
     }
 
-    private void recordEventFailure(
+    private Long recordEventFailure(
+            IngestRequestTrace trace,
             StorageRef storageRef,
             String failureStage,
             ParsedEventVersion parsedEvent,
             Throwable failure) {
-        if (storageRef == null) {
-            return;
-        }
         try {
-            eventIngestFailureLogService.recordFailure(
-                    SourceSystem.FUIOU.getCode(), ContentType.PAYMENT.getCode(), storageRef,
+            return eventIngestFailureLogService.recordFailure(
+                    trace.requestId(), SourceSystem.FUIOU.getCode(), ContentType.PAYMENT.getCode(),
+                    trace.payloadSha256(), storageRef,
                     failureStage, parsedEvent, failure);
         } catch (Exception auditException) {
-            log.error("[Ingress Audit] ❌ Payment ingest failure could not be recorded. storageId={}",
-                    storageRef.storageId(), auditException);
+            log.error("[Ingress Audit] ❌ Payment ingest failure could not be recorded. "
+                            + "requestId={}, payloadSha256={}, storageId={}, stage={}",
+                    trace.requestId(), trace.payloadSha256Hex(),
+                    storageRef == null ? null : storageRef.storageId(),
+                    failureStage, auditException);
+            return null;
         }
+    }
+
+    private static FuiouResponse failureResponse(String message, String requestId) {
+        return FuiouResponse.fail(message + "; requestId=" + requestId);
     }
 
     private void publishPaymentEvent(PaymentEventDO eventDO) {

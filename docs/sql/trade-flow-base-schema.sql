@@ -71,22 +71,26 @@ CREATE TABLE `trade_payment_event` (
 
 CREATE TABLE `trade_event_ingest_failure_log` (
   `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '自增主键',
+  `request_id` CHAR(32) NOT NULL COMMENT '单次接入请求排障ID，与响应及服务端日志一致',
   `source_system` TINYINT UNSIGNED NOT NULL COMMENT '来源系统：0未知；1富友',
   `content_type` TINYINT UNSIGNED NOT NULL COMMENT '内容类型：1订单；2支付',
-  `raw_id` BIGINT NOT NULL COMMENT '关联trade_storage.id',
-  `payload_sha256` BINARY(32) NOT NULL COMMENT '原始内容SHA-256，与raw_id共同定位Storage',
-  `failure_stage` VARCHAR(32) NOT NULL COMMENT '失败阶段：EVENT_FIELD_PARSE/EVENT_PERSIST',
+  `raw_id` BIGINT NULL COMMENT 'Storage成功时关联trade_storage.id；前置失败时为空',
+  `payload_sha256` BINARY(32) NOT NULL COMMENT '原始内容SHA-256；Storage成功后与raw_id共同定位内容',
+  `failure_stage` VARCHAR(32) NOT NULL COMMENT '失败阶段：SIGNATURE_VERIFY/STORAGE_PERSIST/EVENT_FIELD_PARSE/EVENT_PERSIST',
   `error_code` INT NOT NULL COMMENT '标准错误码',
-  `failure_reason` VARCHAR(1024) NOT NULL COMMENT '失败原因摘要',
+  `exception_type` VARCHAR(255) NOT NULL COMMENT '最外层异常完整类名',
+  `failure_reason` VARCHAR(1024) NOT NULL COMMENT '最多8层异常链摘要',
   `third_event_key` VARCHAR(128) NULL COMMENT '已成功提取时记录第三方事件键',
   `message_version` BIGINT UNSIGNED NULL COMMENT '已成功提取时记录第三方消息版本',
   `create_time` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '失败发生时间',
   PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_request_id` (`request_id`),
   KEY `idx_storage` (`raw_id`, `payload_sha256`),
+  KEY `idx_payload_time` (`payload_sha256`, `create_time`),
   KEY `idx_type_stage_time` (`content_type`, `failure_stage`, `create_time`),
   KEY `idx_create_time` (`create_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
-  COMMENT='Storage成功但event未正常落库的接入失败审计';
+  COMMENT='第三方事件接入全阶段失败审计';
 
 CREATE TABLE `trade_event_delivery_control` (
   `content_type` TINYINT UNSIGNED NOT NULL COMMENT '事件通道：1订单；2支付',

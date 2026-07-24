@@ -13,12 +13,16 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.util.HashSet;
+import java.util.Set;
+
 /** Event 接入失败审计服务实现。 */
 @Service
 @RequiredArgsConstructor
 public class EventIngestFailureLogServiceImpl implements EventIngestFailureLogService {
 
     private static final int MAX_REASON_LENGTH = 1024;
+    private static final int MAX_CAUSE_DEPTH = 8;
 
     private final EventIngestFailureLogDbService failureLogDbService;
 
@@ -27,24 +31,31 @@ public class EventIngestFailureLogServiceImpl implements EventIngestFailureLogSe
             transactionManager = "ingressTransactionManager",
             propagation = Propagation.REQUIRES_NEW,
             rollbackFor = Exception.class)
-    public void recordFailure(
+    public Long recordFailure(
+            String requestId,
             int sourceSystem,
             int contentType,
+            byte[] payloadSha256,
             StorageRef storageRef,
             String failureStage,
             ParsedEventVersion parsedEvent,
             Throwable failure) {
-        if (storageRef == null || storageRef.storageId() == null || storageRef.sha256() == null) {
-            return;
+        if (!StringUtils.hasText(requestId)) {
+            throw new BusinessException(ErrorCode.PARAM_INVALID, "event接入失败审计requestId不能为空");
+        }
+        if (payloadSha256 == null || payloadSha256.length != 32) {
+            throw new BusinessException(ErrorCode.PARAM_INVALID, "event接入失败审计payloadSha256必须为32字节");
         }
         EventIngestFailureLogDO entity = new EventIngestFailureLogDO();
+        entity.setRequestId(requestId);
         entity.setSourceSystem(sourceSystem);
         entity.setContentType(contentType);
-        entity.setRawId(storageRef.storageId());
-        entity.setPayloadSha256(storageRef.sha256());
+        entity.setRawId(storageRef == null ? null : storageRef.storageId());
+        entity.setPayloadSha256(payloadSha256);
         entity.setFailureStage(failureStage);
         entity.setErrorCode(failure instanceof BusinessException businessException
                 ? businessException.getCode() : ErrorCode.SYSTEM_ERROR.getCode());
+        entity.setExceptionType(failure == null ? "unknown" : failure.getClass().getName());
         entity.setFailureReason(limitReason(failure));
         if (parsedEvent != null) {
             entity.setThirdEventKey(parsedEvent.eventKey());
@@ -53,13 +64,30 @@ public class EventIngestFailureLogServiceImpl implements EventIngestFailureLogSe
         if (!failureLogDbService.save(entity)) {
             throw new BusinessException(ErrorCode.DATA_CREATE_ERROR, "event接入失败审计记录保存失败");
         }
+        return entity.getId();
     }
 
     private static String limitReason(Throwable failure) {
-        String reason = failure == null ? null : failure.getMessage();
-        if (!StringUtils.hasText(reason)) {
-            reason = failure == null ? "unknown" : failure.getClass().getName();
+        if (failure == null) {
+            return "unknown";
         }
-        return reason.length() <= MAX_REASON_LENGTH ? reason : reason.substring(0, MAX_REASON_LENGTH);
+        StringBuilder reason = new StringBuilder();
+        Set<Throwable> visited = new HashSet<>();
+        Throwable current = failure;
+        int depth = 0;
+        while (current != null && depth < MAX_CAUSE_DEPTH && visited.add(current)) {
+            if (!reason.isEmpty()) {
+                reason.append(" <- ");
+            }
+            reason.append(current.getClass().getSimpleName());
+            if (StringUtils.hasText(current.getMessage())) {
+                reason.append(": ").append(current.getMessage());
+            }
+            current = current.getCause();
+            depth++;
+        }
+        return reason.length() <= MAX_REASON_LENGTH
+                ? reason.toString()
+                : reason.substring(0, MAX_REASON_LENGTH);
     }
 }

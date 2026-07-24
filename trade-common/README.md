@@ -95,7 +95,7 @@ global-id:
   snowflake:
     datacenter-id: 1      # 0~31，所有实例必须唯一
     worker-id: 1           # 0~31，所有实例必须唯一
-    max-clock-backward-ms: 5
+    max-clock-backward-ms: 1000 # 小幅校时等待追平；超过1秒拒绝发号
     epoch: 1704067200000   # 2024-01-01 UTC，固定后不得修改
   domains:
     order:                  # 仅预注册，仍共享全局引擎

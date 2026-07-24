@@ -14,7 +14,7 @@ import java.util.Map;
  *   snowflake:
  *     datacenter-id: 1
  *     worker-id: 1
- *     max-clock-backward-ms: 5
+ *     max-clock-backward-ms: 1000
  *     epoch: 1704067200000
  *   domains:
  *     storage:
@@ -99,7 +99,7 @@ public class GlobalIdProperties {
 
         private long datacenterId = 0;
         private long workerId = 0;
-        private long maxClockBackwardMs = 5;
+        private long maxClockBackwardMs = 1000;
         private long epoch = DEFAULT_EPOCH;
 
         public long getDatacenterId() {

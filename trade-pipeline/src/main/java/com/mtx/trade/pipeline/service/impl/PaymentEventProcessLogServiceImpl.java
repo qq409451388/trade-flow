@@ -7,7 +7,7 @@ import com.mtx.trade.common.exception.BusinessException;
 import com.mtx.trade.pipeline.dto.PaymentEventMessage;
 import com.mtx.trade.pipeline.entity.PaymentEventProcessLogDO;
 import com.mtx.trade.pipeline.service.PaymentEventProcessLogService;
-import com.mtx.trade.pipeline.service.PaymentPersistResult;
+import com.mtx.trade.pipeline.enums.PaymentPersistResult;
 import com.mtx.trade.pipeline.service.db.PaymentEventProcessLogDbService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;

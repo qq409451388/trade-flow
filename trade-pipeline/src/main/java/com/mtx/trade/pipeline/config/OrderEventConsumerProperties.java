@@ -15,6 +15,8 @@ public class OrderEventConsumerProperties {
     private String group = "trade-pipeline-order";
     private String consumerName = "pipeline-order-1";
     private int batchSize = 100;
+    private int workerCount = 8;
+    private int workerQueueCapacity = 250;
     private Duration blockTimeout = Duration.ofSeconds(2);
     private Duration reclaimDelay = Duration.ofSeconds(30);
     private Duration pendingMinIdle = Duration.ofMinutes(1);

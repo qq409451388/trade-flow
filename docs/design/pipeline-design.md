@@ -12,15 +12,17 @@
 ## 2. 订单事件处理链路
 
 1. 使用消费组从 `stream:order-event` 读取新消息。
-2. 校验 `eventId/storageId/storageSha256/sourceSystem/contentType/messageVersion`。
-3. 通过 `(storageId, storageSha256)` 从 Storage 读取元数据和原始 JSON，并再次校验来源与类型。
-4. 校验事件 `messageVersion` 必须等于原文 `recUpdTm`。
-5. 每个事件使用独立的 `pipelineTransactionManager` 事务更新订单快照并全量替换子表。
-6. Pipeline 事务提交后可靠记录处理审计，再调用 Ingress `/event/ack`。
-7. 业务成功但 Ingress ACK 失败时仍执行 Redis `XACK`；Ingress 保持 `acked=0`，由定时补拉仅补 ACK。
-8. 已明确捕获的业务失败使用独立事务记录失败流水，随后执行 Redis `XACK`，不 ACK Ingress，等待下一轮未 ACK 补拉。
+2. 单线程读取器按 `sourceSystem + eventKey` 把消息投递到固定的有界 worker 分区；同订单保持提交顺序，
+   不同订单并行，队列满时阻塞读取形成背压。
+3. 校验 `eventId/storageId/storageSha256/sourceSystem/contentType/messageVersion`。
+4. 通过 `(storageId, storageSha256)` 从 Storage 读取元数据和原始 JSON，并再次校验来源与类型。
+5. 校验事件 `messageVersion` 必须等于原文 `recUpdTm`。
+6. 每个事件使用独立的 `pipelineTransactionManager` 事务更新订单快照并全量替换子表。
+7. Pipeline 事务提交后可靠记录处理审计，再调用 Ingress `/event/ack`。
+8. 业务成功但 Ingress ACK 失败时仍执行 Redis `XACK`；Ingress 保持 `acked=0`，由定时补拉仅补 ACK。
+9. 已明确捕获的业务失败使用独立事务记录失败流水，随后执行 Redis `XACK`，不 ACK Ingress，等待下一轮未 ACK 补拉。
    失败流水无法落库时保留 PEL，防止静默丢失。
-9. 定时通过 `XPENDING + XCLAIM` 接管超过 `pending-min-idle` 的消息，包含其他宕机 consumer 的 PEL；PEL
+10. 定时通过 `XPENDING + XCLAIM` 接管超过 `pending-min-idle` 的消息，包含其他宕机 consumer 的 PEL；PEL
    只承担处理中断恢复，不承担无限业务重试。
 
 重复或乱序事件以 `recUpdTm` 为准：小于或等于当前 `source_update_time` 的版本不再改表，
@@ -75,10 +77,13 @@ Pipeline 业务事务显式使用 `pipelineTransactionManager`，不得将 Pipel
 
 参考项目 `xppbz` 的主表 UPSERT、子表删除重建思路被保留，但修正了以下问题：
 
-- 不再把落库失败的消息统一 ACK；失败消息留在 PEL。
+- 业务失败审计可靠落库后 XACK 当前 Redis 消息并保留 Ingress 未 ACK；只有处理中断、审计失败或
+  Redis XACK 失败才留在 PEL。
 - 不再只读取当前 consumer 的 Pending；允许接管宕机实例名下的 PEL。
 - 不再用 `orderNo + orderState` 判断重复，避免旧状态覆盖新版本；改用 `recUpdTm`。
 - 所有查询、删除和新增都携带年度及 Hash 分片条件，规格表显式使用年份 Hint。
+- 新订单不执行无意义的子表范围 DELETE；更新订单先查询旧主键，再按主键集合和分片条件精确删除，
+  避免 `order_no` 二级索引 gap lock 导致同分片不同订单插入死锁；瞬时锁失败在新事务中有限重试。
 - Pipeline 数据提交、Ingress ACK、Redis XACK 按顺序执行，后两步失败可通过幂等重试恢复。
 
 已确认并实现：
@@ -97,6 +102,16 @@ Pipeline 业务事务显式使用 `pipelineTransactionManager`，不得将 Pipel
   `process_status=FAILED + ingress_ack_status=SUCCEEDED` 的人工处理终态，并按批汇总发送企业微信告警。
 - Pipeline 提供 `/readiness/event-consumer` 监控 Pipeline 数据库、Storage 数据源、Redis、consumer group 和订阅状态；
   readiness 不参与 Ingress 发布状态或数据正确性。
+- Pipeline 提供固定 JSON 的 `GET /performance/current`。后台每5秒采集一次 JVM、CPU、内存、GC、业务 worker
+  输入/输出吞吐、任务耗时、活动数、队列水位、背压次数、实时处理成功/失败和双 ACK 失败、补拉线程池、
+  两个 Hikari 连接池及 Redis Stream lag/pending，默认保留最近60条。接口不查询业务表。
+- 响应的 `analysisContext/metricGuide` 描述数据链路、并发有序模型和指标语义；`capacityTargets` 默认订单/支付
+  各100 RPS，可通过环境变量调整；`recentWindow/recentSamples` 提供趋势；`assessment` 明确区分空闲、
+  负载不足、达到目标、worker背压、Stream积压、CPU/数据库瓶颈和处理/ACK失败。单次响应可直接交给 AI 分析。
+- 只有窗口最大输入达到目标的80%才允许给出容量结论；低于该值返回 `INSUFFICIENT_LOAD`。`pending` 包含
+  已分发但尚未XACK的排队/执行中任务，接近 `activeWorkers + queuedTasks` 时属于正常在途状态；Stream lag
+  至少达到约1秒目标流量才判为 `STREAM_LAGGING`，避免瞬时采样抖动误报。
+- 默认订单8个 worker、支付4个，每个分区队列250。诊断结论只作为容量证据汇总，不替代处理审计和错误日志。
 
 支付事件采用相同的可靠投递闭环：`stream:payment-event` + `trade-pipeline-payment` 消费组，处理结果写入
 `pipeline_payment_event_log`。支付流水以 `paySsn` 为不可变幂等键：相同 SHA 为幂等成功，不同 SHA 记为

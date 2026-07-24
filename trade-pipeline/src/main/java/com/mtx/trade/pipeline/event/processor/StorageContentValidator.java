@@ -1,4 +1,4 @@
-package com.mtx.trade.pipeline.service;
+package com.mtx.trade.pipeline.event.processor;
 
 import com.mtx.trade.common.enums.ErrorCode;
 import com.mtx.trade.common.exception.BusinessException;

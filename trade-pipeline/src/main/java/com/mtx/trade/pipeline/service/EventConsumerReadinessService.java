@@ -2,6 +2,9 @@ package com.mtx.trade.pipeline.service;
 
 import com.mtx.trade.common.enums.ContentType;
 
+import com.mtx.trade.pipeline.event.consumer.EventStreamListenerRegistry;
+import com.mtx.trade.pipeline.event.consumer.OrderEventStreamConsumer;
+import com.mtx.trade.pipeline.event.consumer.PaymentEventStreamConsumer;
 import com.mtx.trade.pipeline.dto.EventConsumerReadinessVO;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;

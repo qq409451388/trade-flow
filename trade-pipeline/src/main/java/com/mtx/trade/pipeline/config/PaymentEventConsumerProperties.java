@@ -15,6 +15,8 @@ public class PaymentEventConsumerProperties {
     private String group = "trade-pipeline-payment";
     private String consumerName = "pipeline-payment-1";
     private int batchSize = 100;
+    private int workerCount = 4;
+    private int workerQueueCapacity = 250;
     private Duration blockTimeout = Duration.ofSeconds(2);
     private Duration pendingMinIdle = Duration.ofMinutes(1);
 }

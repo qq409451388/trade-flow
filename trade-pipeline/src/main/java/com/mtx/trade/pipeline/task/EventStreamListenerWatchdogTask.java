@@ -2,7 +2,7 @@ package com.mtx.trade.pipeline.task;
 
 import com.mtx.trade.common.enums.ContentType;
 import com.mtx.trade.pipeline.config.EventConsumerConfiguration;
-import com.mtx.trade.pipeline.service.EventStreamListenerRegistry;
+import com.mtx.trade.pipeline.event.consumer.EventStreamListenerRegistry;
 import lombok.RequiredArgsConstructor;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;

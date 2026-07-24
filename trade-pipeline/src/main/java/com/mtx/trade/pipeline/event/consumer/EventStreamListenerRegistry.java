@@ -1,4 +1,4 @@
-package com.mtx.trade.pipeline.service;
+package com.mtx.trade.pipeline.event.consumer;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.stream.StreamMessageListenerContainer;

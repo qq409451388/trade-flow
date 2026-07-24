@@ -39,7 +39,13 @@ public class StorageWriteService {
             throw new StorageWriteException("storage Redis lock acquire failed", e);
         }
         try {
-            return storageWriter.putIfAbsent(command);
+            try {
+                return storageWriter.putIfAbsent(command);
+            } catch (StorageWriteException e) {
+                throw e;
+            } catch (RuntimeException e) {
+                throw new StorageWriteException("storage persistence failed", e);
+            }
         } finally {
             if (!redisLock.releaseLock(lockKey)) {
                 log.warn("[Storage Lock] 🔄 Redis lock release failed; lease expiry will release it. key={}", lockKey);

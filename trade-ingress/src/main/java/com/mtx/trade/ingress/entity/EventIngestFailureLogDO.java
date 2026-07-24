@@ -19,12 +19,14 @@ public class EventIngestFailureLogDO implements Serializable {
 
     @TableId(type = IdType.AUTO)
     private Long id;
+    private String requestId;
     private Integer sourceSystem;
     private Integer contentType;
     private Long rawId;
     private byte[] payloadSha256;
     private String failureStage;
     private Integer errorCode;
+    private String exceptionType;
     private String failureReason;
     private String thirdEventKey;
     private Long messageVersion;

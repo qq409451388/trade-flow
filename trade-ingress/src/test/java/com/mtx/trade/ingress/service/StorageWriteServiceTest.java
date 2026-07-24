@@ -59,6 +59,25 @@ class StorageWriteServiceTest {
         assertThat(events).containsExactly("lock", "write", "release");
     }
 
+    @Test
+    void shouldWrapUnexpectedStorageRuntimeFailureForIngressAudit() {
+        List<String> events = new ArrayList<>();
+        RecordingRedisLock redisLock = new RecordingRedisLock(events);
+        StorageWriter storageWriter = command -> {
+            events.add("write");
+            throw new IllegalStateException("connection reset");
+        };
+        StorageWriteService service = new StorageWriteService(storageWriter, redisLock, properties());
+
+        assertThatThrownBy(() -> service.putIfAbsent(
+                new StorageWriteCommand(1, 1, new byte[]{1}, null)))
+                .isInstanceOf(StorageWriteException.class)
+                .hasMessage("storage persistence failed")
+                .hasRootCauseMessage("connection reset");
+
+        assertThat(events).containsExactly("lock", "write", "release");
+    }
+
     private static StorageWriteProperties properties() {
         StorageWriteProperties properties = new StorageWriteProperties();
         properties.setLockWait(Duration.ofSeconds(5));

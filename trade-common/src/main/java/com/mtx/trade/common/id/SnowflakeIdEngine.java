@@ -4,6 +4,7 @@ import com.mtx.trade.common.id.exception.ClockBackwardException;
 import com.mtx.trade.common.id.exception.InvalidDatacenterIdException;
 import com.mtx.trade.common.id.exception.InvalidWorkerIdException;
 import com.mtx.trade.common.id.exception.TimestampOverflowException;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * 雪花算法 ID 引擎。
@@ -27,6 +28,7 @@ import com.mtx.trade.common.id.exception.TimestampOverflowException;
  *   <li>异常中包含当前时间、上次时间、回拨毫秒数、datacenterId、workerId。</li>
  * </ul>
  */
+@Slf4j
 public class SnowflakeIdEngine {
 
     // ---- 位长度 ----
@@ -103,6 +105,8 @@ public class SnowflakeIdEngine {
             long backwardMs = lastTimestamp - currentTimestamp;
             if (backwardMs <= maxClockBackwardMs) {
                 // 回拨在阈值内，等待时间追平
+                long detectedBackwardMs = backwardMs;
+                long waitStartedNanos = System.nanoTime();
                 try {
                     Thread.sleep(backwardMs);
                 } catch (InterruptedException e) {
@@ -118,6 +122,13 @@ public class SnowflakeIdEngine {
                     throw new ClockBackwardException(currentTimestamp, lastTimestamp,
                             backwardMs, datacenterId, workerId);
                 }
+                long waitedMs = Math.max(
+                        1L, (System.nanoTime() - waitStartedNanos) / 1_000_000L);
+                log.warn("[Snowflake ID] Clock rollback recovered; ID generation resumed. "
+                                + "backwardMs={}, waitedMs={}, toleranceMs={}, "
+                                + "datacenterId={}, workerId={}",
+                        detectedBackwardMs, waitedMs, maxClockBackwardMs,
+                        datacenterId, workerId);
             } else {
                 // 回拨超过阈值，拒绝生成
                 throw new ClockBackwardException(currentTimestamp, lastTimestamp,

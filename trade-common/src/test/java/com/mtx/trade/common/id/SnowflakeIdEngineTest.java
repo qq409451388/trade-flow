@@ -81,14 +81,14 @@ class SnowflakeIdEngineTest {
     void smallClockBackwardRecovers() throws Exception {
         long now = System.currentTimeMillis();
         ControllableTimeProvider tp = new ControllableTimeProvider(now);
-        SnowflakeIdEngine engine = new SnowflakeIdEngine(EPOCH, 1, 1, 100, tp);
+        SnowflakeIdEngine engine = new SnowflakeIdEngine(EPOCH, 1, 1, 1000, tp);
 
         // 生成一个 ID，记录 lastTimestamp
         long firstId = engine.nextId();
         long lastTs = engine.getLastTimestamp();
 
-        // 时钟回拨 50ms（在阈值 100ms 内，引擎会 sleep(50ms) 等待）
-        tp.set(now - 50);
+        // 复现真实故障中的53ms回拨（在默认阈值1000ms内，引擎会等待）
+        tp.set(now - 53);
 
         // 另一个线程在 sleep 期间推进时间（10ms 后推进，远早于 50ms sleep 结束）
         Thread advancer = new Thread(() -> {
@@ -101,7 +101,7 @@ class SnowflakeIdEngineTest {
         });
         advancer.start();
 
-        // 调用 nextId：检测到回拨 50ms（<= 100），sleep(50ms)，期间 advancer 已将时间推进到 now+10
+        // 调用 nextId：检测到回拨53ms（<=1000），等待期间advancer将时间推进到now+10
         long secondId = engine.nextId();
         advancer.join();
 

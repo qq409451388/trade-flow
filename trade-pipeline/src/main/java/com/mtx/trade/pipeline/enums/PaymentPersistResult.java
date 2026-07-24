@@ -1,4 +1,4 @@
-package com.mtx.trade.pipeline.service;
+package com.mtx.trade.pipeline.enums;
 
 /** 支付流水持久化结果。 */
 public enum PaymentPersistResult {

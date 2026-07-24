@@ -31,7 +31,8 @@ global-id:
   snowflake:
     datacenter-id: ${PIPELINE_ID_DATACENTER_ID:1}
     worker-id: ${PIPELINE_ID_WORKER_ID:2}
-    max-clock-backward-ms: 5
+    # 小幅NTP/宿主机校时期间暂停发号并等待追平；超过1秒仍快速失败。
+    max-clock-backward-ms: ${SNOWFLAKE_MAX_CLOCK_BACKWARD_MS:1000}
 
 trade:
   pipeline:
@@ -48,6 +49,9 @@ trade:
       group: trade-pipeline-order
       consumer-name: ${PIPELINE_ORDER_CONSUMER_NAME:pipeline-order-1}
       batch-size: 100
+      # Redis读取保持单线程；业务按 sourceSystem + eventKey 分配到固定worker，保证同订单有序。
+      worker-count: ${PIPELINE_ORDER_WORKER_COUNT:8}
+      worker-queue-capacity: ${PIPELINE_ORDER_WORKER_QUEUE_CAPACITY:250}
       block-timeout: 2s
       listener-watchdog-delay: 5000
       reclaim-delay: 30000
@@ -63,6 +67,8 @@ trade:
       group: trade-pipeline-payment
       consumer-name: ${PIPELINE_PAYMENT_CONSUMER_NAME:pipeline-payment-1}
       batch-size: 100
+      worker-count: ${PIPELINE_PAYMENT_WORKER_COUNT:4}
+      worker-queue-capacity: ${PIPELINE_PAYMENT_WORKER_QUEUE_CAPACITY:250}
       block-timeout: 2s
       listener-watchdog-delay: 5000
       reclaim-delay: 30000
@@ -77,6 +83,16 @@ trade:
       terminal-failure-attempts: 3
       max-run-duration: 10m
       lease-duration: 15m
+    performance-monitoring:
+      enabled: true
+      # 最近5分钟，每5秒一条紧凑样本；单次响应即可交给AI分析完整趋势。
+      sample-interval-ms: ${PIPELINE_PERFORMANCE_SAMPLE_INTERVAL_MS:5000}
+      history-size: ${PIPELINE_PERFORMANCE_HISTORY_SIZE:60}
+      order-target-rps: ${PIPELINE_ORDER_TARGET_RPS:100}
+      payment-target-rps: ${PIPELINE_PAYMENT_TARGET_RPS:100}
+      queue-warning-percent: 50
+      cpu-warning-percent: 80
+      data-source-warning-percent: 90
     fuiou-order:
       zone-id: Asia/Shanghai
     fuiou-payment:

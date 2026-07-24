@@ -29,6 +29,8 @@ class GlobalIdAutoConfigurationTest {
             assertThat(context).hasSingleBean(IdGeneratorRegistry.class);
             assertThat(context).hasSingleBean(TimeProvider.class);
             assertThat(context).hasSingleBean(SystemTimeProvider.class);
+            assertThat(context.getBean(SnowflakeIdEngine.class).getMaxClockBackwardMs())
+                    .isEqualTo(1000);
         });
     }
 

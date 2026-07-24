@@ -1,5 +1,4 @@
-package com.mtx.trade.pipeline.service;
-
+package com.mtx.trade.pipeline.event.consumer;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.connection.stream.MapRecord;
 import org.springframework.data.redis.connection.stream.RecordId;

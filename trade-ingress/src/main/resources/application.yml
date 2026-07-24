@@ -30,7 +30,8 @@ global-id:
   snowflake:
     datacenter-id: ${GLOBAL_ID_DATACENTER_ID:1}
     worker-id: ${GLOBAL_ID_WORKER_ID:1}
-    max-clock-backward-ms: 5
+    # 小幅NTP/宿主机校时期间暂停发号并等待追平；超过1秒仍快速失败。
+    max-clock-backward-ms: ${SNOWFLAKE_MAX_CLOCK_BACKWARD_MS:1000}
   domains:
     storage:
       independent: true
@@ -39,6 +40,9 @@ global-id:
 
 trade:
   ingress:
+    observability:
+      # 成功或失败请求超过阈值时，记录签名、Storage、event和Redis发布的分阶段耗时。
+      slow-request-threshold: 1s
     storage-write:
       lock-wait: 5s
       # MySQL socketTimeout 为10分钟；租约覆盖单次写入的最大预期耗时，并预留1分钟释放窗口。
@@ -46,7 +50,8 @@ trade:
     event-delivery:
       # 首次发布失败后最多短重试2次；历史遗漏统一由 Pipeline 未 ACK 补拉收敛。
       retry-delays: 1m,2m
-      realtime-grace-period: 30s
+      # 给健康实时消费留足缓冲，避免压测短时积压时补拉线程与实时worker重复争抢同一事件。
+      realtime-grace-period: 2m
       circuit:
         enabled: true
         failure-window: 1m

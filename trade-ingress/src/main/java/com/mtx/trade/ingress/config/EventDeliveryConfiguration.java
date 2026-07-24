@@ -13,6 +13,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
         EventDeliveryProperties.class,
         EventDeliveryCircuitProperties.class,
         StorageWriteProperties.class,
+        IngressObservabilityProperties.class,
         EventStreamProperties.class
 })
 public class EventDeliveryConfiguration {
