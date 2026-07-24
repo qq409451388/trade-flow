@@ -271,10 +271,15 @@ public class OrderEventStreamConsumer {
         try {
             Long acknowledged = redisTemplate.opsForStream().acknowledge(
                     properties.getStreamKey(), properties.getGroup(), record.getId());
-            succeeded = acknowledged != null && acknowledged > 0;
-            if (!succeeded) {
-                log.warn("[Redis XACK] 🔄 Order XACK affected no pending record; the record will not be deleted. "
-                        + "recordId={}", record.getId().getValue());
+            if (acknowledged != null && acknowledged > 0) {
+                succeeded = true;
+            } else {
+                // XACK returns 0 when the record is no longer in PEL — it was already
+                // acknowledged by a concurrent thread (stream listener vs PEL reclaim race).
+                // The desired end state is achieved; treat as success and clean up the record.
+                succeeded = true;
+                log.debug("[Redis XACK] Order record was already acknowledged by a concurrent thread; "
+                        + "stream cleanup will proceed. recordId={}", record.getId().getValue());
             }
         } catch (Exception e) {
             log.error("[Redis XACK] ❌ Order XACK failed; record remains recoverable in PEL. recordId={}",

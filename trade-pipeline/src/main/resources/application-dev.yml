@@ -6,12 +6,12 @@ server:
 spring:
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://localhost:3306/trade_pipeline?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+    url: jdbc:mysql://localhost:3306/trade_pipeline_fake?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
     username: root
     password:
     hikari:
-      maximum-pool-size: 20
-      minimum-idle: 4
+      maximum-pool-size: 50
+      minimum-idle: 10
       connection-timeout: 30000
   data:
     redis:
@@ -22,7 +22,7 @@ spring:
       timeout: 3000ms
       lettuce:
         pool:
-          max-active: 24
+          max-active: 32
           max-idle: 16
           min-idle: 4
 
@@ -37,11 +37,11 @@ trade:
       sql-show: false
     datasource:
       driver-class-name: com.mysql.cj.jdbc.Driver
-      url: jdbc:mysql://localhost:3306/trade_flow?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+      url: jdbc:mysql://localhost:3306/trade_flow_fake?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
       username: root
       password:
       hikari:
-        maximum-pool-size: 16
-        minimum-idle: 4
+        maximum-pool-size: 50
+        minimum-idle: 10
         connection-timeout: 30000
         read-only: true

@@ -49,7 +49,7 @@ trade:
       lock-lease: 11m
     event-delivery:
       # 首次发布失败后最多短重试2次；历史遗漏统一由 Pipeline 未 ACK 补拉收敛。
-      retry-delays: 1m,2m
+      retry-delays: 1m,5m
       # 给健康实时消费留足缓冲，避免压测短时积压时补拉线程与实时worker重复争抢同一事件。
       realtime-grace-period: 2m
       circuit:
@@ -70,7 +70,7 @@ trade:
     order-consumer-group: trade-pipeline-order
     payment-consumer-group: trade-pipeline-payment
     # 约 7 天峰值缓冲；XADD 使用 MAXLEN~ 原子兜底，正常消费后还会 XDEL。
-    max-length: ${TRADE_STREAM_MAX_LENGTH:1000000}
+    max-length: ${TRADE_STREAM_MAX_LENGTH:2000000}
     high-watermark: ${TRADE_STREAM_HIGH_WATERMARK:900000}
     low-watermark: ${TRADE_STREAM_LOW_WATERMARK:700000}
     publish-rate-per-second: ${TRADE_STREAM_PUBLISH_RPS:2000}

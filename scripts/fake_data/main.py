@@ -12,6 +12,7 @@
 用法：
   # 生成 1 亿订单，分布在 2025-01-01 ~ 2025-06-30 (约 55 万/天)
   python3 main.py --total-orders 100000000 --start-date 2025-01-01 --end-date 2025-06-30
+  python3 main.py --orders-per-day 100000 --start-date 2025-01-01 --end-date 2025-06-30
 
   # 指定每日订单量 (总量 = 每日量 × 天数)
   python3 main.py --orders-per-day 500000 --start-date 2025-01-01 --end-date 2025-06-30
@@ -682,8 +683,8 @@ async def main():
 
         with open(order_file, "w", encoding="utf-8") as fo, \
              open(pay_file, "w", encoding="utf-8") as fp:
-            for date in dates:
-                daily_count = orders_per_day + (1 if date == dates[0] and remainder else 0)
+            for di, date in enumerate(dates):
+                daily_count = orders_per_day + (1 if di < remainder else 0)
                 for seq in range(1, daily_count + 1):
                     order, payments = generate_order_and_payments(date, seq)
                     if order:
@@ -720,6 +721,8 @@ async def main():
     total_order_fail = progress.get("total_order_fail", 0) if args.resume else 0
     total_pay_sent = progress.get("total_pay_sent", 0) if args.resume else 0
     total_pay_fail = progress.get("total_pay_fail", 0) if args.resume else 0
+    # 记录 resume 时的历史基数，速率计算时扣除，避免前期虚高后逐渐掉速
+    resume_order_offset = total_order_sent
     t_start = time.time()
     batch_count = 0
     # 本 session 已发送量 (用于限速计算，不含 resume 恢复的历史计数)
@@ -727,6 +730,10 @@ async def main():
     session_start = time.time()
 
     error_file = open(args.error_file, "a", encoding="utf-8")
+
+    # 当前处理状态 (供 KeyboardInterrupt 捕获使用)
+    cur_date = dates[0]
+    cur_daily_seq = 0
 
     try:
         async with aiohttp.ClientSession(connector=connector) as session:
@@ -785,11 +792,14 @@ async def main():
                     elapsed = time.time() - t_start
                     total_sent = total_order_sent + total_pay_sent
                     total_target = total_orders + int(total_orders * 0.15)  # 粗估含支付
-                    rate = total_order_sent / max(1, elapsed)
+                    session_order_sent = total_order_sent - resume_order_offset
+                    rate = session_order_sent / max(1, elapsed)
                     eta_sec = (total_orders - total_order_sent) / max(1, rate) if rate > 0 else 0
                     eta_str = str(timedelta(seconds=int(eta_sec)))
 
                     daily_done = seq - 1
+                    cur_date = date
+                    cur_daily_seq = daily_done
                     print(
                         f"    {date} | 日进度: {daily_done:,}/{daily_target:,} "
                         f"| 总订单: {total_order_sent:,}/{total_orders:,} "
@@ -836,8 +846,8 @@ async def main():
     except KeyboardInterrupt:
         print(f"\n\n  [中断] 保存进度中...")
         save_progress(args.progress_file, {
-            "current_date": date if 'date' in dir() else dates[0],
-            "daily_seq": daily_done if 'daily_done' in dir() else 0,
+            "current_date": cur_date,
+            "daily_seq": cur_daily_seq,
             "completed_dates": list(completed_dates),
             "total_sent": total_order_sent + total_pay_sent,
             "total_order_sent": total_order_sent,
@@ -863,7 +873,7 @@ async def main():
     print(f"  订单: 成功 {total_order_sent:,} / 失败 {total_order_fail}")
     print(f"  支付: 成功 {total_pay_sent:,} / 失败 {total_pay_fail}")
     print(f"  合计: 成功 {total_sent:,} / 失败 {total_fail}")
-    print(f"  整体速率: {total_order_sent/max(1, t_total):.0f} 单/s")
+    print(f"  整体速率: {(total_order_sent - resume_order_offset)/max(1, t_total):.0f} 单/s")
     if total_fail > 0:
         print(f"  错误详情: {args.error_file}")
     print(f"{'='*60}\n")

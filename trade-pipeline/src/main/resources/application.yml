@@ -50,8 +50,8 @@ trade:
       consumer-name: ${PIPELINE_ORDER_CONSUMER_NAME:pipeline-order-1}
       batch-size: 100
       # Redis读取保持单线程；业务按 sourceSystem + eventKey 分配到固定worker，保证同订单有序。
-      worker-count: ${PIPELINE_ORDER_WORKER_COUNT:8}
-      worker-queue-capacity: ${PIPELINE_ORDER_WORKER_QUEUE_CAPACITY:250}
+      worker-count: ${PIPELINE_ORDER_WORKER_COUNT:16}
+      worker-queue-capacity: ${PIPELINE_ORDER_WORKER_QUEUE_CAPACITY:1250}
       block-timeout: 2s
       listener-watchdog-delay: 5000
       reclaim-delay: 30000
@@ -67,8 +67,8 @@ trade:
       group: trade-pipeline-payment
       consumer-name: ${PIPELINE_PAYMENT_CONSUMER_NAME:pipeline-payment-1}
       batch-size: 100
-      worker-count: ${PIPELINE_PAYMENT_WORKER_COUNT:4}
-      worker-queue-capacity: ${PIPELINE_PAYMENT_WORKER_QUEUE_CAPACITY:250}
+      worker-count: ${PIPELINE_PAYMENT_WORKER_COUNT:8}
+      worker-queue-capacity: ${PIPELINE_PAYMENT_WORKER_QUEUE_CAPACITY:1250}
       block-timeout: 2s
       listener-watchdog-delay: 5000
       reclaim-delay: 30000
